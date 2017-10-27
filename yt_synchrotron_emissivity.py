@@ -5,9 +5,7 @@ import yt
 from yt.fields.derived_field import ValidateGridType
 from yt.fields.field_detector import FieldDetector
 from yt.funcs import mylog, only_on_root
-import sys
-sys.path.append('../Particles/')
-from particle_filters import *
+from particles.particle_filters import *
 
 def _jet_volume_fraction(field, data):
     from yt.units import g, cm, Kelvin
@@ -266,16 +264,19 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
                          data[(ptype, 'particle_magz')]])*np.sqrt(4.0*np.pi)
         Bvec = data.apply_units(Bvec, 'gauss')
 
-        B = np.sqrt(np.sum(Bvec*Bvec, axis=0))
-
-        # Do nothing for now. How do we integrate over uniform pitch angle? 
-        Bsina = B
+        # Calculate sin(a), in which a is the pitch angle of the electrons relative to B field.
+        # See _nn_emissivity_i for more comments
+        cross = np.cross(los, Bvec, axisb=0)
+        Bsina = np.sqrt(np.sum(cross*cross, axis=-1))
+        Bsina = data.apply_units(Bsina, 'gauss')
+        #B = np.sqrt(np.sum(Bvec*Bvec, axis=0))
 
         # Return for the FieldDetector; do nothing
         if isinstance(data, FieldDetector):
             return data[ptype, 'particle_dens']/data[ptype, 'particle_den1']**(1./3.)/ \
                     (data[(ptype, 'particle_dtau')])
 
+        # Density when the particle left the jet
         den1 = data[(ptype, 'particle_den1')]
         dtau = data[(ptype, 'particle_dtau')]
 
@@ -301,14 +302,16 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
         # B**1.5 is taken from the grid data
         norm = 3.0/8.0*e**3.5/(c**2.5*me**1.5*(np.pi)**0.5)
         # P is taken from the grid data
-        N0 = 3.0/me/c/c/(np.log(np.abs(gamc/gamma_min)))
+        N0 = 3.0/me/c/c/(np.log(np.abs(gamc/gamma_min)))/yt.YTQuantity(4.*np.pi, 'sr')
+
+        # Fix where the cutoff gamma < 0
         N0[ind] = 0.0
 
         return N0*norm*nu**(-0.5)*np.exp(-nu/nuc)
 
     fname1 =('io', 'particle_sync_spec_%s' % nu_str)
     ds.add_field(fname1, function=_synchrotron_spec, sampling_type='particle',
-                 units='cm**(3/4)*s**(3/2)/g**(3/4)', force_override=True)
+                 units='cm**(3/4)*s**(3/2)/g**(3/4)/sr', force_override=True)
     #try:
     ds.add_particle_filter(ptype)
     #except:
@@ -324,17 +327,24 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
         '''
         Emissivity using nearest neighbor. Integrate over line of sight to get intensity.
         '''
-        B = data[('gas', 'magnetic_field_magnitude')]
+        Bvec = np.array([data[('gas', 'magnetic_field_x')],\
+                         data[('gas', 'magnetic_field_y')],\
+                         data[('gas', 'magnetic_field_z')]])
 
-        # P * B^1.5
-        PB = data['gas', 'pressure']*B**1.5\
-             /yt.YTQuantity(4.*np.pi, 'sr')
+        # Calculate sin(a), in which a is the pitch angle of the electrons relative to B field.
+        # We only see the radiation from electrons with pitch angles pointing to line of sight.
+        cross = np.cross(los, Bvec, axisb=0)
+        # B * sin(alpha) = (B * |(los x Bvec)|/|los|/|Bvec|)
+        # = |(los x Bvec)|
+        Bsina = np.sqrt(np.sum(cross*cross, axis=-1))
+        Bsina = data.apply_units(Bsina, 'gauss')
+
+        # P * (B*sina)^1.5
+        PBsina = data['gas', 'pressure']*Bsina**1.5
+
         frac = data['gas', 'jet_volume_fraction']
 
-        # Integral of 1/2*(sin(alpha))^(5/2) from 0 to pi
-        sina52 = 0.5*1.43777
-
-        return PB*sina52*frac*tot_const*data['deposit', '%s_nn_sync_spec_%s' % (ptype, nu_str)]
+        return PBsina*frac*tot_const*data['deposit', '%s_nn_sync_spec_%s' % (ptype, nu_str)]
 
     fname_nn_emis = ('deposit', 'nn_emissivity_i_%s_%s' % (ptype, nu_str))
     ds.add_field(fname_nn_emis, function=_nn_emissivity_i, sampling_type='cell',
