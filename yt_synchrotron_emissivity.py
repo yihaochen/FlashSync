@@ -7,6 +7,26 @@ from yt.fields.field_detector import FieldDetector
 from yt.funcs import mylog, only_on_root
 from particles.particle_filters import *
 
+class StokesFieldName(object):
+    """
+    Define field names for Stokes I, Q, and U for easy access.
+    """
+    def __init__(self, ptype, nu, field_type='deposit', fieldname_prefix='nn_emissivity'):
+        # particle type
+        self.ptype = ptype
+        # frequency tuple
+        self.nu = nu
+        # frequency in string
+        self.nu_str = '%.1f%s' % nu
+        self.I = (field_type, fieldname_prefix+'_i_%s_%s' % (self.ptype, self.nu_str))
+        self.Q = (field_type, fieldname_prefix+'_q_%s_%s' % (self.ptype, self.nu_str))
+        self.U = (field_type, fieldname_prefix+'_u_%s_%s' % (self.ptype, self.nu_str))
+        self.IQU = [self.I, self.Q, self.U]
+
+    def display_name(self, IQU):
+        return '%s NN Emissivity %s (%s)' % (self.nu_str, IQU, self.ptype)
+
+
 def _jet_volume_fraction(field, data):
     from yt.units import g, cm, Kelvin
     mH = yt.utilities.physical_constants.mass_hydrogen
@@ -218,9 +238,8 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
     # 2*F(x) for the total intensity (parallel + perpendicular)
     tot_const = 4.1648
 
-
+    stokes = StokesFieldName(ptype, nu)
     nu = yt.YTQuantity(*nu)
-    nu_str = str(nu).replace(' ', '')
 
     if proj_axis=='x':
         los = [1.,0.,0.]
@@ -309,8 +328,9 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
 
         return N0*norm*nu**(-0.5)*np.exp(-nu/nuc)
 
-    fname1 =('io', 'particle_sync_spec_%s' % nu_str)
-    ds.add_field(fname1, function=_synchrotron_spec, sampling_type='particle',
+    # particle field name
+    pfname = ('io', 'particle_sync_spec_%s' % stokes.nu_str)
+    ds.add_field(pfname, function=_synchrotron_spec, sampling_type='particle',
                  units='cm**(3/4)*s**(3/2)/g**(3/4)/sr', force_override=True)
     #try:
     ds.add_particle_filter(ptype)
@@ -320,8 +340,8 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
     ###########################################################################
     ## Nearest Neighbor method
     ###########################################################################
-    fname2 = ds.add_deposited_particle_field(
-            (ptype, 'particle_sync_spec_%s' % nu_str), 'nearest', extend_cells=extend_cells)
+    fname_nn = ds.add_deposited_particle_field(
+            (ptype, 'particle_sync_spec_%s' % stokes.nu_str), 'nearest', extend_cells=extend_cells)
 
     def _nn_emissivity_i(field, data):
         '''
@@ -344,11 +364,10 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
 
         frac = data['gas', 'jet_volume_fraction']
 
-        return PBsina*frac*tot_const*data['deposit', '%s_nn_sync_spec_%s' % (ptype, nu_str)]
+        return PBsina*frac*tot_const*data[fname_nn]
 
-    fname_nn_emis = ('deposit', 'nn_emissivity_i_%s_%s' % (ptype, nu_str))
-    ds.add_field(fname_nn_emis, function=_nn_emissivity_i, sampling_type='cell',
-                 display_name='%s NN Emissivity I (%s)' % (nu_str, ptype),
+    ds.add_field(stokes.I, function=_nn_emissivity_i, sampling_type='cell',
+                 display_name=stokes.display_name('I'),
                  units='Jy/cm/arcsec**2', take_log=True,
                  force_override=True)
 
@@ -360,14 +379,12 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
         # cos = cos(theta), theta is the angle between projected B and xvec
         cos = np.inner(Bproj, xvec)/np.sqrt(np.sum(Bproj*Bproj, axis=-1))
         cos[np.isnan(cos)] = 0.0
-        fname_nn_emis = ('deposit', 'nn_emissivity_i_%s_%s' % (ptype, nu_str))
         # pol_ratio = (perp - para) / (perp + para)
         # The minus accounts for the perpendicular polarization
-        return -data[fname_nn_emis]*pol_ratio*(2*cos*cos-1.0)
+        return -data[stokes.I]*pol_ratio*(2*cos*cos-1.0)
 
-    fname_nn_emis_q = ('deposit', 'nn_emissivity_q_%s_%s' % (ptype, nu_str))
-    ds.add_field(fname_nn_emis_q, function=_nn_emissivity_q, sampling_type='cell',
-                 display_name='%s NN Emissivity Q (%s)' % (nu_str, ptype),
+    ds.add_field(stokes.Q, function=_nn_emissivity_q, sampling_type='cell',
+                 display_name=stokes.display_name('Q'),
                  units='Jy/cm/arcsec**2', take_log=False,
                  force_override=True)
 
@@ -380,13 +397,11 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
         sin = np.sqrt(1.0-cos*cos)
         cos[np.isnan(cos)] = 0.0
         sin[np.isnan(sin)] = 0.0
-        fname_nn_emis = ('deposit', 'nn_emissivity_i_%s_%s' % (ptype, nu_str))
-        return -data[fname_nn_emis]*pol_ratio*2*sin*cos
+        return -data[stokes.I]*pol_ratio*2*sin*cos
 
-    fname_nn_emis_u = ('deposit', 'nn_emissivity_u_%s_%s' % (ptype, nu_str))
-    ds.add_field(fname_nn_emis_u, function=_nn_emissivity_u, sampling_type='cell',
-                 display_name='%s NN Emissivity U (%s)' % (nu_str, ptype),
+    ds.add_field(stokes.U, function=_nn_emissivity_u, sampling_type='cell',
+                 display_name=stokes.display_name('U'),
                  units='Jy/cm/arcsec**2', take_log=False,
                  force_override=True)
 
-    return fname1, fname2, fname_nn_emis, nu_str
+    return pfname, fname_nn, stokes.I, stokes.nu_str
