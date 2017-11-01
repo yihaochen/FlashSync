@@ -5,7 +5,11 @@ import yt
 from yt.fields.field_detector import FieldDetector
 from yt.funcs import mylog, only_on_root
 from yt.utilities.file_handler import HDF5FileHandler
+from yt.utilities.parallel_tools.parallel_analysis_interface import \
+    parallel_objects, \
+    communication_system
 from particles.particle_filters import *
+
 
 
 class StokesFieldName(object):
@@ -418,7 +422,7 @@ def setup_part_file(ds):
     if os.path.exists(updated_pfname):
         ds._particle_handle = HDF5FileHandler(updated_pfname)
         ds.particle_filename = filename.replace('plt_cnt', 'part')+'_updated'
-        mylog.info('Changed particle files to: ' + ds.particle_filename)
+        mylog.info('Changed particle files to: %s', ds.particle_filename)
         return True
     else:
         return False
@@ -438,19 +442,29 @@ def prep_field_data(ds, field, offset=1):
     Prepare the grid data. Read the field data grid by grid, remove bad values.
     Return the numpy array with shape [ngrid, nx, ny, nz].
     """
+    # data.shape should be (ngrid, nxb, nyb, nzb)
     data = np.zeros([ds.index.num_grids, *ds.index.grid_dimensions[0]], dtype='float32')
     # Go through all the grids in the index
-    # TODO: seems to be very slow. Is there a faster way to do this?
-    for g in ds.index.grids:
+    for g in parallel_objects(ds.index.grids, njobs=0):
         # Print the grid if nan or inf is in it
         if np.nan in g[field].v or np.inf in g[field].v:
-            print(g[field].v)
+            mylog.warning('Encountered non-physical values in %s', g) # g[field].v)
+        # Calculate the field values in each grid
         # Use numpy nan_to_num to convert the bad values anyway
+        # Transpose the array since the grid data in yt is transposed
         data[g.id-offset] = np.nan_to_num(g[field].v.transpose())
+    comm = communication_system.communicators[-1]
+    data = comm.mpi_allreduce(data, op="sum")
+
     return data
 
 
-def write_hdf5_data(ds, ptype='lobe', proj_axis='x', nu=(1.4, 'GHz')):
+def write_synchrotron_hdf5(ds, ptype='lobe', proj_axis='x', nu=(1.4, 'GHz')):
+    """
+    Calculate the emissivity of Stokes I, Q, and U in each cell. Write them
+    to a new HDF5 file and copy metadata from the original HDF5 files.
+    The new HDF5 file can then be loaded into yt and make plots.
+    """
     # The new file name that we are going to write to
     sfname = synchrotron_file_name(ds, ptype, proj_axis, nu)
 
@@ -460,32 +474,37 @@ def write_hdf5_data(ds, ptype='lobe', proj_axis='x', nu=(1.4, 'GHz')):
 
     # Keep a list of the fields that were in the original hdf5 file
     orig_field_list = [field.decode() for field in h5_handle['unknown names'].value[:,0]]
-    print(orig_field_list)
 
     # Field names that we are going to write to the new hdf5 file
     stokes = StokesFieldName(ptype, nu)
     # Take only the field name, discard "deposit" field type
     write_fields = np.array([f for ftype, f in stokes.IQU])
 
-    with h5py.File(os.path.join(ds.directory, sfname), 'w') as h5file:
-        print('Writing to', sfname)
-        print('Fields to be written:', write_fields)
+    # Here we do the actual calculation (in yt) and save the grid data
+    data = {}
+    for field in write_fields:
+        mylog.info('Preparing field: %s', field)
+        data[field] = prep_field_data(ds, field)
+    comm = communication_system.communicators[-1]
+    if comm.rank == 0:
+        with h5py.File(os.path.join(ds.directory, sfname), 'w') as h5file:
+            mylog.info('Writing to %s', sfname)
+            mylog.info('Fields to be written: %s', write_fields)
 
-        # Go through all the items in the original hdf5 file
-        for name, v in h5_handle.items():
-            if name in orig_field_list:
-                # Do not write the fields that were present in the original hdf5 file
-                pass
-            elif name == 'unknown names':
-                # Replace the field names by the new ones
-                bnames = [f.encode('utf8') for f in write_fields]
-                h5file.create_dataset('unknown names', data=bnames)
-            else:
-                # Keep other simulation information
-                h5file.create_dataset(v.name, v.shape, v.dtype, v.value)
-        # Here we do the actual calculation (in yt) and write the new fields
-        for field in write_fields:
-            data = prep_field_data(ds, field)
-            fieldname = field[1] if type(field) is tuple else field
-            print('Writing field:', fieldname)
-            h5file.create_dataset(fieldname, data.shape, data.dtype, data)
+            # Go through all the items in the original hdf5 file
+            for name, v in h5_handle.items():
+                if name in orig_field_list:
+                    # Do not write the fields that were present in the original hdf5 file
+                    pass
+                elif name == 'unknown names':
+                    # Replace the field names by the new ones
+                    bnames = [f.encode('utf8') for f in write_fields]
+                    h5file.create_dataset('unknown names', data=bnames)
+                else:
+                    # Keep other simulation information
+                    h5file.create_dataset(v.name, v.shape, v.dtype, v.value)
+            for field in write_fields:
+                fieldname = field[1] if type(field) is tuple else field
+                # Here we do the actual writing
+                mylog.info('Writing field: %s', fieldname)
+                h5file.create_dataset(fieldname, data[field].shape, data[field].dtype, data[field])
