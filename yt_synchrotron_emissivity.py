@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import h5py
+import itertools
 import yt
 from yt.fields.field_detector import FieldDetector
 from yt.funcs import mylog, only_on_root
@@ -11,21 +12,25 @@ from yt.utilities.parallel_tools.parallel_analysis_interface import \
 from particles.particle_filters import *
 
 
-
 class StokesFieldName(object):
     """
     Define field names for Stokes I, Q, and U for easy access.
     """
-    def __init__(self, ptype, nu, field_type='deposit', fieldname_prefix='nn_emissivity'):
+    def __init__(self, ptype, nu, proj_axis, field_type='deposit', fieldname_prefix='nn_emissivity'):
         # particle type
         self.ptype = ptype
         # frequency tuple
         self.nu = nu
         # frequency in string
         self.nu_str = '%.1f%s' % nu
-        self.I = (field_type, fieldname_prefix+'_i_%s_%s' % (self.ptype, self.nu_str))
-        self.Q = (field_type, fieldname_prefix+'_q_%s_%s' % (self.ptype, self.nu_str))
-        self.U = (field_type, fieldname_prefix+'_u_%s_%s' % (self.ptype, self.nu_str))
+        # projection axis could be x,y,z or a vector
+        if type(proj_axis) is str:
+            postfix = proj_axis
+        elif type(proj_axis) is list:
+            postfix = '%.1f_%.1f_%.1f' % tuple(proj_axis)
+        self.I = (field_type, fieldname_prefix+'_i_%s_%s_%s' % (self.ptype, self.nu_str, postfix))
+        self.Q = (field_type, fieldname_prefix+'_q_%s_%s_%s' % (self.ptype, self.nu_str, postfix))
+        self.U = (field_type, fieldname_prefix+'_u_%s_%s_%s' % (self.ptype, self.nu_str, postfix))
         self.IQU = [self.I, self.Q, self.U]
 
     def display_name(self, IQU):
@@ -243,7 +248,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
     # 2*F(x) for the total intensity (parallel + perpendicular)
     tot_const = 4.1648
 
-    stokes = StokesFieldName(ptype, nu)
+    stokes = StokesFieldName(ptype, nu, proj_axis)
     nu = yt.YTQuantity(*nu)
 
     if proj_axis=='x':
@@ -428,14 +433,10 @@ def setup_part_file(ds):
         return False
 
 
-def synchrotron_file_name(ds, ptype, proj_axis, nu):
-    nu_str = '%.1f%s' % nu
-    postfix = '_synchrotron_%s_%s_' % (ptype, nu_str)
-    if type(proj_axis) is str:
-        postfix += proj_axis
-    elif type(proj_axis) is list:
-        postfix += '%.1f_%.1f_%.1f' % tuple(proj_axis)
+def synchrotron_file_name(ds):
+    postfix = '_synchrotron'
     return ds.basename + postfix
+
 
 def prep_field_data(ds, field, offset=1):
     """
@@ -459,52 +460,67 @@ def prep_field_data(ds, field, offset=1):
     return data
 
 
-def write_synchrotron_hdf5(ds, ptype='lobe', proj_axis='x', nu=(1.4, 'GHz')):
+def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', extend_cells=None):
     """
     Calculate the emissivity of Stokes I, Q, and U in each cell. Write them
     to a new HDF5 file and copy metadata from the original HDF5 files.
     The new HDF5 file can then be loaded into yt and make plots.
     """
     # The new file name that we are going to write to
-    sfname = synchrotron_file_name(ds, ptype, proj_axis, nu)
+    sfname = synchrotron_file_name(ds)
 
-    pars = add_synchrotron_dtau_emissivity(ds, ptype=ptype, nu=nu, proj_axis=proj_axis)
+    pars = add_synchrotron_dtau_emissivity(ds, ptype=ptype, nu=nu, proj_axis=proj_axis,
+                                           extend_cells=extend_cells)
 
     h5_handle = ds._handle
 
     # Keep a list of the fields that were in the original hdf5 file
     orig_field_list = [field.decode() for field in h5_handle['unknown names'].value[:,0]]
-
     # Field names that we are going to write to the new hdf5 file
-    stokes = StokesFieldName(ptype, nu)
+    stokes = StokesFieldName(ptype, nu, proj_axis)
     # Take only the field name, discard "deposit" field type
     write_fields = np.array([f for ftype, f in stokes.IQU])
 
-    # Here we do the actual calculation (in yt) and save the grid data
-    data = {}
-    for field in write_fields:
-        mylog.info('Preparing field: %s', field)
-        data[field] = prep_field_data(ds, field)
     comm = communication_system.communicators[-1]
+    # Only do the IO in the master process
     if comm.rank == 0:
-        with h5py.File(os.path.join(ds.directory, sfname), 'w') as h5file:
+        with h5py.File(os.path.join(ds.directory, sfname), 'a') as h5file:
             mylog.info('Writing to %s', sfname)
             mylog.info('Fields to be written: %s', write_fields)
 
-            # Go through all the items in the original hdf5 file
+            # Go through all the items in the FLASH hdf5 file
             for name, v in h5_handle.items():
-                if name in orig_field_list:
-                    # Do not write the fields that were present in the original hdf5 file
+                if name in itertools.chain(orig_field_list, h5file.keys()):
+                    # Do not write the fields that were present in the FLASH hdf5 file
+                    # or in the destination hdf5 file
                     pass
                 elif name == 'unknown names':
-                    # Replace the field names by the new ones
-                    bnames = [f.encode('utf8') for f in write_fields]
-                    h5file.create_dataset('unknown names', data=bnames)
+                    pass
                 else:
                     # Keep other simulation information
                     h5file.create_dataset(v.name, v.shape, v.dtype, v.value)
+
+            if 'unknown names' in h5file.keys():
+                # Add the new field names to be written
+                exist_fields = list(h5file['unknown names'].value)
+                del h5file['unknown names']
+            else:
+                exist_fields = []
+            # We need to encode the field name to binary format
+            bnames = [f.encode('utf8') for f in write_fields] + exist_fields
+            # Create a new dataset for the field names
+            h5file.create_dataset('unknown names', data=bnames)
+
             for field in write_fields:
                 fieldname = field[1] if type(field) is tuple else field
-                # Here we do the actual writing
-                mylog.info('Writing field: %s', fieldname)
-                h5file.create_dataset(fieldname, data[field].shape, data[field].dtype, data[field])
+                if fieldname in h5file.keys():
+                    mylog.info('Skipping field: %s (already exists)', field)
+                    #TODO: Check if the data are the same
+                    pass
+                else:
+                    mylog.info('Preparing field: %s', field)
+                    # Here we do the actual calculation (in yt) and save the grid data
+                    data = prep_field_data(ds, field)
+                    mylog.info('Writing field: %s', fieldname)
+                    # Writing data
+                    h5file.create_dataset(fieldname, data.shape, data.dtype, data)
