@@ -8,7 +8,8 @@ from yt.funcs import mylog, only_on_root
 from yt.utilities.file_handler import HDF5FileHandler
 from yt.utilities.parallel_tools.parallel_analysis_interface import \
     parallel_objects, \
-    communication_system
+    communication_system, \
+    parallel_blocking_call
 from particles.particle_filters import *
 
 
@@ -435,7 +436,7 @@ def setup_part_file(ds):
 
 def synchrotron_file_name(ds):
     postfix = '_synchrotron'
-    return ds.basename + postfix
+    return os.path.join(ds.directory, ds.basename + postfix)
 
 
 def prep_field_data(ds, field, offset=1):
@@ -460,6 +461,7 @@ def prep_field_data(ds, field, offset=1):
     return data
 
 
+@parallel_blocking_call
 def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', extend_cells=None):
     """
     Calculate the emissivity of Stokes I, Q, and U in each cell. Write them
@@ -484,7 +486,8 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', ext
     comm = communication_system.communicators[-1]
     # Only do the IO in the master process
     if comm.rank == 0:
-        with h5py.File(os.path.join(ds.directory, sfname), 'a') as h5file:
+        h5file = h5py.File(sfname, 'a')
+        try:
             mylog.info('Writing to %s', sfname)
             mylog.info('Fields to be written: %s', write_fields)
 
@@ -515,12 +518,25 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', ext
                 fieldname = field[1] if type(field) is tuple else field
                 if fieldname in h5file.keys():
                     mylog.info('Skipping field: %s (already exists)', field)
+                    doit = False
+                    comm.mpi_bcast(doit, root=0)
                     #TODO: Check if the data are the same
-                    pass
                 else:
                     mylog.info('Preparing field: %s', field)
+                    doit = True
+                    comm.mpi_bcast(doit, root=0)
                     # Here we do the actual calculation (in yt) and save the grid data
                     data = prep_field_data(ds, field)
                     mylog.info('Writing field: %s', fieldname)
                     # Writing data
                     h5file.create_dataset(fieldname, data.shape, data.dtype, data)
+        finally:
+            mylog.info('Closing file %s', h5file)
+            h5file.close()
+    # Other processes
+    else:
+        for field in write_fields:
+            doit = False
+            doit = comm.mpi_bcast(doit, root=0)
+            if doit:
+                data = prep_field_data(ds, field)
