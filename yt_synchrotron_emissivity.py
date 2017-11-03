@@ -444,6 +444,7 @@ def prep_field_data(ds, field, offset=1):
     Prepare the grid data. Read the field data grid by grid, remove bad values.
     Return the numpy array with shape [ngrid, nx, ny, nz].
     """
+    mylog.info('Calculating field: %s', field)
     # data.shape should be (ngrid, nxb, nyb, nzb)
     data = np.zeros([ds.index.num_grids, *ds.index.grid_dimensions[0]], dtype='float32')
     # Go through all the grids in the index
@@ -462,7 +463,8 @@ def prep_field_data(ds, field, offset=1):
 
 
 @parallel_blocking_call
-def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', extend_cells=None):
+def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', extend_cells=None,
+        sanitize_fieldnames=False):
     """
     Calculate the emissivity of Stokes I, Q, and U in each cell. Write them
     to a new HDF5 file and copy metadata from the original HDF5 files.
@@ -471,9 +473,6 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', ext
     # The new file name that we are going to write to
     sfname = synchrotron_file_name(ds)
 
-    pars = add_synchrotron_dtau_emissivity(ds, ptype=ptype, nu=nu, proj_axis=proj_axis,
-                                           extend_cells=extend_cells)
-
     h5_handle = ds._handle
 
     # Keep a list of the fields that were in the original hdf5 file
@@ -481,62 +480,81 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', ext
     # Field names that we are going to write to the new hdf5 file
     stokes = StokesFieldName(ptype, nu, proj_axis)
     # Take only the field name, discard "deposit" field type
-    write_fields = np.array([f for ftype, f in stokes.IQU])
+    write_fields = [f for ftype, f in stokes.IQU]
 
     comm = communication_system.communicators[-1]
     # Only do the IO in the master process
     if comm.rank == 0:
-        h5file = h5py.File(sfname, 'a')
-        try:
-            mylog.info('Writing to %s', sfname)
-            mylog.info('Fields to be written: %s', write_fields)
-
-            # Go through all the items in the FLASH hdf5 file
-            for name, v in h5_handle.items():
-                if name in itertools.chain(orig_field_list, h5file.keys()):
-                    # Do not write the fields that were present in the FLASH hdf5 file
-                    # or in the destination hdf5 file
-                    pass
-                elif name == 'unknown names':
-                    pass
-                else:
-                    # Keep other simulation information
-                    h5file.create_dataset(v.name, v.shape, v.dtype, v.value)
-
-            if 'unknown names' in h5file.keys():
-                # Add the new field names to be written
-                exist_fields = list(h5file['unknown names'].value)
-                del h5file['unknown names']
-            else:
-                exist_fields = []
-            # We need to encode the field name to binary format
-            bnames = [f.encode('utf8') for f in write_fields] + exist_fields
-            # Create a new dataset for the field names
-            h5file.create_dataset('unknown names', data=bnames)
-
-            for field in write_fields:
-                fieldname = field[1] if type(field) is tuple else field
-                if fieldname in h5file.keys():
-                    mylog.info('Skipping field: %s (already exists)', field)
-                    doit = False
-                    comm.mpi_bcast(doit, root=0)
+        exist_fields = []
+        written_fields = []
+        if os.path.isfile(sfname):
+            with h5py.File(sfname, 'r') as h5file:
+                # First check if the fields already exist
+                if 'unknown names' in h5file.keys():
+                    exist_fields = [f.decode('utf8') for f in h5file['unknown names'].value]
+                for field in write_fields.copy():
                     #TODO: Check if the data are the same
-                else:
-                    mylog.info('Preparing field: %s', field)
-                    doit = True
-                    comm.mpi_bcast(doit, root=0)
-                    # Here we do the actual calculation (in yt) and save the grid data
-                    data = prep_field_data(ds, field)
-                    mylog.info('Writing field: %s', fieldname)
-                    # Writing data
-                    h5file.create_dataset(fieldname, data.shape, data.dtype, data)
-        finally:
-            mylog.info('Closing file %s', h5file)
-            h5file.close()
-    # Other processes
-    else:
+                    if field in exist_fields and field in h5file.keys():
+                        write_fields.remove(field)
+                    elif field in h5file.keys():
+                    # Some fields are not recorded by already in the dataset
+                        write_fields.remove(field)
+                        exist_fields.append(field)
+                        sanitize_fieldnames = True
+            mylog.info('Fields already exist: %s', exist_fields)
+        else:
+        # File does not exist
+            pass
+
+        wdata = {}
+
+    # On all processes
+    write_fields = comm.mpi_bcast(write_fields, root=0)
+
+    if write_fields:
+        mylog.info('Fields to be written: %s', write_fields)
+        pars = add_synchrotron_dtau_emissivity(ds, ptype=ptype, nu=nu, proj_axis=proj_axis,
+                                   extend_cells=extend_cells)
         for field in write_fields:
-            doit = False
-            doit = comm.mpi_bcast(doit, root=0)
-            if doit:
-                data = prep_field_data(ds, field)
+            mylog.info('Preparing field: %s', field)
+            # Here we do the actual calculation (in yt) and save the grid data
+            data = prep_field_data(ds, field)
+            # On master process only
+            if comm.rank == 0:
+                wdata[field] = data
+
+        # On master process only
+        if comm.rank == 0:
+            with h5py.File(sfname, 'a') as h5file:
+                mylog.info('Writing to %s', h5file)
+                for field in write_fields:
+                    # Writing data to HDF5 file
+                    mylog.info('Write fields: %s', write_fields)
+                    mylog.info('Writing field: %s', field)
+                    h5file.create_dataset(field, wdata[field].shape, wdata[field].dtype, wdata[field])
+                    written_fields.append(field)
+
+                # Go through all the items in the FLASH hdf5 file
+                for name, v in h5_handle.items():
+                    if name in itertools.chain(orig_field_list, h5file.keys()):
+                        # Do not write the fields that were present in the FLASH hdf5 file
+                        # or other metadata that had been copied in the destination hdf5 file
+                        pass
+                    elif name == 'unknown names':
+                        pass
+                    else:
+                        # Keep other simulation information
+                        h5file.create_dataset(v.name, v.shape, v.dtype, v.value)
+
+    if write_fields or sanitize_fieldnames:
+        if comm.rank == 0:
+            with h5py.File(sfname, 'a') as h5file:
+                # Add the new field names that have already been written
+                all_fields = list(set(written_fields + exist_fields))
+                # We need to encode the field name to binary format
+                bnames = [f.encode('utf8') for f in all_fields]
+                # Create a new dataset for the field names
+                if 'unknown names' in h5file.keys():
+                    del h5file['unknown names']
+                h5file.create_dataset('unknown names', data=bnames)
+                mylog.info('Field List: %s', bnames)
