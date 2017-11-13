@@ -1,9 +1,12 @@
 import os
+import sys
 import numpy as np
 import h5py
 import itertools
 import yt
 from yt.fields.field_detector import FieldDetector
+from yt.fields.derived_field import \
+    ValidateSpatial
 from yt.funcs import mylog, only_on_root
 from yt.utilities.file_handler import HDF5FileHandler
 from yt.utilities.parallel_tools.parallel_analysis_interface import \
@@ -234,8 +237,9 @@ def add_synchrotron_pol_emissivity(ds, ptype='jnsp', nu=(1.4, 'GHz'), method='ne
     return fname1, fname2, fname_nn_emis, nu_str
 
 
-def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='nearest', proj_axis='x', \
-                                    extend_cells=None):
+def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
+                                    method='nearest', proj_axis='x',
+                                    extend_cells=16):
     me = yt.utilities.physical_constants.mass_electron #9.109E-28
     c  = yt.utilities.physical_constants.speed_of_light #2.998E10
     e  = yt.utilities.physical_constants.elementary_charge #4.803E-10 esu
@@ -321,7 +325,9 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
             print(dtau)
 
         # The new cutoff gamma
-        gamc = (data[(ptype, 'particle_dens')] / den1)**(1./3.) / dtau
+        # Note that particle_dens could be negative due to quadratic interpolation!
+        gamc = (np.abs(data[(ptype, 'particle_dens')] / den1))**(1./3.) \
+               / (dtau + np.finfo(np.float64).tiny)
         ind = np.where(gamc < 0.0)[0]
         if ind.shape[0] > 0:
             print(ind)
@@ -336,7 +342,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
         # B**1.5 is taken from the grid data
         norm = 3.0/8.0*e**3.5/(c**2.5*me**1.5*(np.pi)**0.5)
         # P is taken from the grid data
-        N0 = 3.0/me/c/c/(np.log(np.abs(gamc/gamma_min)))/yt.YTQuantity(4.*np.pi, 'sr')
+        N0 = 3.0/me/c/c/(np.log(gamc/gamma_min))/yt.YTQuantity(4.*np.pi, 'sr')
 
         # Fix where the cutoff gamma < 0
         N0[ind] = 0.0
@@ -355,8 +361,38 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
     ###########################################################################
     ## Nearest Neighbor method
     ###########################################################################
-    fname_nn = ds.add_deposited_particle_field(
-            (ptype, 'particle_sync_spec_%s' % stokes.nu_str), 'nearest', extend_cells=extend_cells)
+    #fname_nn = ds.add_deposited_particle_field(
+    #        (ptype, 'particle_sync_spec_%s' % stokes.nu_str), 'nearest', extend_cells=extend_cells)
+
+    deposit_field = 'particle_sync_spec_%s' % stokes.nu_str
+
+    units = ds.field_info[ptype, deposit_field].units
+    field_name = "%s_nn_%s"
+    field_name = field_name % (ptype, deposit_field.replace('particle_', ''))
+    ad = ds.all_data()
+    #print(ad[ptype, "particle_position"])
+
+    def _nn_deposit_field(field, data):
+        #if isinstance(data, FieldDetector):
+        #    return data.deposit(data[ptype, "particle_position"],
+        #            deposit_field, method="nearest")
+        #pos = ad[ptype, "particle_position"]
+        pos = ad[ptype, "particle_position"]
+        fields = [ad[ptype, deposit_field]]
+        fields = [np.ascontiguousarray(f) for f in fields]
+        d = data.deposit(pos, fields, method='nearest',
+                         extend_cells=extend_cells)
+        d = data.ds.arr(d, input_units=units)
+        return d
+
+    fname_nn = ("deposit", field_name)
+    ds.add_field(fname_nn,
+        function=_nn_deposit_field,
+        sampling_type="cell",
+        units=units,
+        take_log=True,
+        validators=[ValidateSpatial()])
+
 
     def _nn_emissivity_i(field, data):
         '''
@@ -379,40 +415,48 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'), method='n
 
         frac = data['gas', 'jet_volume_fraction']
 
-        return PBsina*frac*tot_const*data[fname_nn]
+        return np.clip(PBsina*frac*tot_const*data[fname_nn], np.finfo(np.float64).tiny, None)
 
     ds.add_field(stokes.I, function=_nn_emissivity_i, sampling_type='cell',
                  display_name=stokes.display_name('I'),
                  units='Jy/cm/arcsec**2', take_log=True,
-                 force_override=True)
+                 force_override=True,
+                 validators=[ValidateSpatial()])
 
-    def _nn_emissivity_q(field, data):
+    def _cos_theta(field, data):
         Bvec = np.stack([data[('gas', 'magnetic_field_x')],\
                          data[('gas', 'magnetic_field_y')],\
                          data[('gas', 'magnetic_field_z')]], axis=-1)
         Bproj = Bvec - np.expand_dims(np.inner(Bvec, los), -1)*los
         # cos = cos(theta), theta is the angle between projected B and xvec
-        cos = np.inner(Bproj, xvec)/np.sqrt(np.sum(Bproj*Bproj, axis=-1))
-        cos[np.isnan(cos)] = 0.0
+        # Ignore invalid 0/0 warnings
+        with np.errstate(invalid='ignore'):
+            cos = np.inner(Bproj, xvec)/np.sqrt(np.sum(Bproj*Bproj, axis=-1))
+        return cos
+
+    ds.add_field('cos', function=_cos_theta, sampling_type='cell',
+                 display_name='cos theta',
+                 units='', take_log=False,
+                 force_override=True)
+
+    def _nn_emissivity_q(field, data):
         # pol_ratio = (perp - para) / (perp + para)
         # The minus accounts for the perpendicular polarization
-        return -data[stokes.I]*pol_ratio*(2*cos*cos-1.0)
+        rtn = -data[stokes.I]*pol_ratio*(2*data['cos']**2-1.0)
+        rtn[~np.isfinite(data['cos'])] = 0.0
+        return rtn
 
     ds.add_field(stokes.Q, function=_nn_emissivity_q, sampling_type='cell',
                  display_name=stokes.display_name('Q'),
                  units='Jy/cm/arcsec**2', take_log=False,
                  force_override=True)
 
+
     def _nn_emissivity_u(field, data):
-        Bvec = np.stack([data[('gas', 'magnetic_field_x')],\
-                         data[('gas', 'magnetic_field_y')],\
-                         data[('gas', 'magnetic_field_z')]], axis=-1)
-        Bproj = Bvec - np.expand_dims(np.inner(Bvec, los), -1)*los
-        cos = np.inner(Bproj, xvec)/np.sqrt(np.sum(Bproj*Bproj, axis=-1))
-        sin = np.sqrt(1.0-cos*cos)
-        cos[np.isnan(cos)] = 0.0
-        sin[np.isnan(sin)] = 0.0
-        return -data[stokes.I]*pol_ratio*2*sin*cos
+        sin = np.sqrt(1.0-data['cos']**2)
+        rtn = -data[stokes.I]*pol_ratio*2*sin*data['cos']
+        rtn[~np.isfinite(data['cos'])] = 0.0
+        return rtn
 
     ds.add_field(stokes.U, function=_nn_emissivity_u, sampling_type='cell',
                  display_name=stokes.display_name('U'),
@@ -434,8 +478,8 @@ def setup_part_file(ds):
         return False
 
 
-def synchrotron_file_name(ds):
-    postfix = '_synchrotron'
+def synchrotron_file_name(ds, extend_cells=0):
+    postfix = '_synchrotron_gc%i' % extend_cells
     return os.path.join(ds.directory, ds.basename + postfix)
 
 
@@ -445,33 +489,39 @@ def prep_field_data(ds, field, offset=1):
     Return the numpy array with shape [ngrid, nx, ny, nz].
     """
     mylog.info('Calculating field: %s', field)
+    comm = communication_system.communicators[-1]
     # data.shape should be (ngrid, nxb, nyb, nzb)
     data = np.zeros([ds.index.num_grids, *ds.index.grid_dimensions[0]], dtype='float32')
     # Go through all the grids in the index
     for g in parallel_objects(ds.index.grids, njobs=0):
+        if comm.rank == 0:
+            sys.stdout.write('\rWorking on Grid %7i / %i' % (g.id, ds.index.num_grids))
         # Print the grid if nan or inf is in it
         if np.nan in g[field].v or np.inf in g[field].v:
             mylog.warning('Encountered non-physical values in %s', g) # g[field].v)
         # Calculate the field values in each grid
         # Use numpy nan_to_num to convert the bad values anyway
-        # Transpose the array since the grid data in yt is transposed
+        # Transpose the array in FLASH is fortran-ordered
         data[g.id-offset] = np.nan_to_num(g[field].v.transpose())
-    comm = communication_system.communicators[-1]
+    if comm.rank == 0:
+        sys.stdout.write(' - mpi_allreduce')
     data = comm.mpi_allreduce(data, op="sum")
+    if comm.rank == 0:
+        sys.stdout.write(' - Done!\n')
 
     return data
 
 
 @parallel_blocking_call
-def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', extend_cells=None,
-        sanitize_fieldnames=False):
+def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x',
+        extend_cells=16, sanitize_fieldnames=False):
     """
     Calculate the emissivity of Stokes I, Q, and U in each cell. Write them
     to a new HDF5 file and copy metadata from the original HDF5 files.
     The new HDF5 file can then be loaded into yt and make plots.
     """
     # The new file name that we are going to write to
-    sfname = synchrotron_file_name(ds)
+    sfname = synchrotron_file_name(ds, extend_cells=extend_cells)
 
     h5_handle = ds._handle
 
@@ -485,6 +535,7 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', ext
     comm = communication_system.communicators[-1]
     # Only do the IO in the master process
     if comm.rank == 0:
+        wdata = {}
         exist_fields = []
         written_fields = []
         if os.path.isfile(sfname):
@@ -501,22 +552,23 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', ext
                         write_fields.remove(field)
                         exist_fields.append(field)
                         sanitize_fieldnames = True
+                mylog.info('Closing File: %s', h5file)
             mylog.info('Fields already exist: %s', exist_fields)
         else:
         # File does not exist
             pass
 
-        wdata = {}
 
     # On all processes
     write_fields = comm.mpi_bcast(write_fields, root=0)
 
     if write_fields:
-        mylog.info('Fields to be written: %s', write_fields)
-        pars = add_synchrotron_dtau_emissivity(ds, ptype=ptype, nu=nu, proj_axis=proj_axis,
-                                   extend_cells=extend_cells)
+        mylog.info('Fields to be generated: %s', write_fields)
+        pars = add_synchrotron_dtau_emissivity(ds, ptype=ptype, nu=nu,
+                                               proj_axis=proj_axis,
+                                               extend_cells=extend_cells)
         for field in write_fields:
-            mylog.info('Preparing field: %s', field)
+            mylog.debug('Preparing field: %s', field)
             # Here we do the actual calculation (in yt) and save the grid data
             data = prep_field_data(ds, field)
             # On master process only
@@ -527,9 +579,9 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', ext
         if comm.rank == 0:
             with h5py.File(sfname, 'a') as h5file:
                 mylog.info('Writing to %s', h5file)
+                mylog.info('Fields to be written: %s', write_fields)
                 for field in write_fields:
                     # Writing data to HDF5 file
-                    mylog.info('Write fields: %s', write_fields)
                     mylog.info('Writing field: %s', field)
                     h5file.create_dataset(field, wdata[field].shape, wdata[field].dtype, wdata[field])
                     written_fields.append(field)
@@ -545,6 +597,7 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', ext
                     else:
                         # Keep other simulation information
                         h5file.create_dataset(v.name, v.shape, v.dtype, v.value)
+            del wdata
 
     if write_fields or sanitize_fieldnames:
         if comm.rank == 0:
@@ -558,3 +611,5 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x', ext
                     del h5file['unknown names']
                 h5file.create_dataset('unknown names', data=bnames)
                 mylog.info('Field List: %s', bnames)
+        else:
+            pass
