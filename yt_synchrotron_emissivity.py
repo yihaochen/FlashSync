@@ -13,7 +13,9 @@ from yt.utilities.parallel_tools.parallel_analysis_interface import \
     parallel_objects, \
     communication_system, \
     parallel_blocking_call
+#from yt.utilities.parallel_tools.task_queue import dynamic_parallel_objects
 from particles.particle_filters import *
+import time
 
 
 class StokesFieldName(object):
@@ -294,12 +296,10 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
                      display_name="Jet Volume Fraction", sampling_type='cell')
 
     def _synchrotron_spec(field, data):
-        # ptype needs to be 'io' (only in this function)
-        ptype = 'io'
         # To convert from FLASH "none" unit to cgs unit, times the B field from FLASH by sqrt(4*pi)
-        Bvec = np.array([data[(ptype, 'particle_magx')],\
-                         data[(ptype, 'particle_magy')],\
-                         data[(ptype, 'particle_magz')]])*np.sqrt(4.0*np.pi)
+        Bvec = np.array([data['particle_magx'],\
+                         data['particle_magy'],\
+                         data['particle_magz']])*np.sqrt(4.0*np.pi)
         Bvec = data.apply_units(Bvec, 'gauss')
 
         # Calculate sin(a), in which a is the pitch angle of the electrons relative to B field.
@@ -311,22 +311,22 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
         # Return for the FieldDetector; do nothing
         if isinstance(data, FieldDetector):
-            return data[ptype, 'particle_dens']/data[ptype, 'particle_den1']**(1./3.)/ \
-                    (data[(ptype, 'particle_dtau')])
+            return data['particle_dens']/data['particle_den1']**(1./3.)/ \
+                    (data['particle_dtau'])
 
         # Density when the particle left the jet
-        den1 = data[(ptype, 'particle_den1')]
-        dtau = data[(ptype, 'particle_dtau')]
+        den1 = data['particle_den1']
+        dtau = data['particle_dtau']
 
         if np.any(dtau < 0.0):
             print('negative tau!')
             print(data)
-            print(data[(ptype, 'particle_tau')])
+            print(data['particle_tau'])
             print(dtau)
 
         # The new cutoff gamma
         # Note that particle_dens could be negative due to quadratic interpolation!
-        gamc = (np.abs(data[(ptype, 'particle_dens')] / den1))**(1./3.) \
+        gamc = (np.abs(data['particle_dens'] / den1))**(1./3.) \
                / (dtau + np.finfo(np.float64).tiny)
         ind = np.where(gamc < 0.0)[0]
         if ind.shape[0] > 0:
@@ -350,7 +350,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
         return N0*norm*nu**(-0.5)*np.exp(-nu/nuc)
 
     # particle field name
-    pfname = ('io', 'particle_sync_spec_%s' % stokes.nu_str)
+    pfname = 'particle_sync_spec_%s' % stokes.nu_str
     ds.add_field(pfname, function=_synchrotron_spec, sampling_type='particle',
                  units='cm**(3/4)*s**(3/2)/g**(3/4)/sr', force_override=True)
     #try:
@@ -366,20 +366,30 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
     deposit_field = 'particle_sync_spec_%s' % stokes.nu_str
 
-    units = ds.field_info[ptype, deposit_field].units
+    units = ds.field_info[deposit_field].units
     field_name = "%s_nn_%s"
     field_name = field_name % (ptype, deposit_field.replace('particle_', ''))
     ad = ds.all_data()
     #print(ad[ptype, "particle_position"])
 
     def _nn_deposit_field(field, data):
-        #if isinstance(data, FieldDetector):
-        #    return data.deposit(data[ptype, "particle_position"],
-        #            deposit_field, method="nearest")
+        if isinstance(data, FieldDetector):
+            return data.deposit(data[ptype, "particle_position"],
+                    deposit_field, method="nearest")
         #pos = ad[ptype, "particle_position"]
-        pos = ad[ptype, "particle_position"]
-        fields = [ad[ptype, deposit_field]]
-        fields = [np.ascontiguousarray(f) for f in fields]
+        alldata = True
+        if alldata:
+            pos = ad[ptype, "particle_position"]
+            fields = [ad[ptype, deposit_field]]
+            fields = [np.ascontiguousarray(f) for f in fields]
+        else:
+            left_edge = np.maximum(data.LeftEdge-data.dds*extend_cells,\
+                                   data.ds.domain_left_edge)
+            right_edge = np.minimum(data.RightEdge+data.dds*extend_cells,\
+                                    data.ds.domain_right_edge)
+            box = data.ds.box(left_edge, right_edge)
+            pos = box[ptype, "particle_position"]
+            fields = [box[ptype, deposit_field]]
         d = data.deposit(pos, fields, method='nearest',
                          extend_cells=extend_cells)
         d = data.ds.arr(d, input_units=units)
@@ -391,6 +401,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
         sampling_type="cell",
         units=units,
         take_log=True,
+        force_override=True,
         validators=[ValidateSpatial()])
 
 
@@ -472,7 +483,7 @@ def setup_part_file(ds):
     if os.path.exists(updated_pfname):
         ds._particle_handle = HDF5FileHandler(updated_pfname)
         ds.particle_filename = filename.replace('plt_cnt', 'part')+'_updated'
-        mylog.info('Changed particle files to: %s', ds.particle_filename)
+        mylog.debug('Changed particle files to: %s', ds.particle_filename)
         return True
     else:
         return False
@@ -493,21 +504,30 @@ def prep_field_data(ds, field, offset=1):
     # data.shape should be (ngrid, nxb, nyb, nzb)
     data = np.zeros([ds.index.num_grids, *ds.index.grid_dimensions[0]], dtype='float32')
     # Go through all the grids in the index
+    if comm.rank == 0:
+        t0 = time.time()
+        t1_prev = t0
     for g in parallel_objects(ds.index.grids, njobs=0):
         if comm.rank == 0:
-            sys.stdout.write('\rWorking on Grid %7i / %i' % (g.id, ds.index.num_grids))
+            t1 = time.time()
+            sys.stdout.write('\rWorking on Grid %7i / %7i - %.3f s' 
+                             % (g.id, ds.index.num_grids, t1-t1_prev))
+            t1_prev = t1
         # Print the grid if nan or inf is in it
         if np.nan in g[field].v or np.inf in g[field].v:
             mylog.warning('Encountered non-physical values in %s', g) # g[field].v)
         # Calculate the field values in each grid
         # Use numpy nan_to_num to convert the bad values anyway
-        # Transpose the array in FLASH is fortran-ordered
+        # Transpose the array since the array in FLASH is fortran-ordered
         data[g.id-offset] = np.nan_to_num(g[field].v.transpose())
     if comm.rank == 0:
         sys.stdout.write(' - mpi_allreduce')
+        t2 = time.time()
     data = comm.mpi_allreduce(data, op="sum")
     if comm.rank == 0:
-        sys.stdout.write(' - Done!\n')
+        t3 = time.time()
+        sys.stdout.write(' - Done!\nGrid Calculation: %.1f MPI: %.1f Total: %.1f\n'
+                         % (t2-t0, t3-t2, t3-t0))
 
     return data
 
@@ -535,7 +555,6 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x',
     comm = communication_system.communicators[-1]
     # Only do the IO in the master process
     if comm.rank == 0:
-        wdata = {}
         exist_fields = []
         written_fields = []
         if os.path.isfile(sfname):
@@ -567,6 +586,8 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x',
         pars = add_synchrotron_dtau_emissivity(ds, ptype=ptype, nu=nu,
                                                proj_axis=proj_axis,
                                                extend_cells=extend_cells)
+        if comm.rank == 0:
+            wdata = {}
         for field in write_fields:
             mylog.debug('Preparing field: %s', field)
             # Here we do the actual calculation (in yt) and save the grid data
@@ -585,6 +606,7 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x',
                     mylog.info('Writing field: %s', field)
                     h5file.create_dataset(field, wdata[field].shape, wdata[field].dtype, wdata[field])
                     written_fields.append(field)
+                del wdata
 
                 # Go through all the items in the FLASH hdf5 file
                 for name, v in h5_handle.items():
@@ -597,19 +619,17 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x',
                     else:
                         # Keep other simulation information
                         h5file.create_dataset(v.name, v.shape, v.dtype, v.value)
-            del wdata
 
-    if write_fields or sanitize_fieldnames:
-        if comm.rank == 0:
-            with h5py.File(sfname, 'a') as h5file:
-                # Add the new field names that have already been written
-                all_fields = list(set(written_fields + exist_fields))
-                # We need to encode the field name to binary format
-                bnames = [f.encode('utf8') for f in all_fields]
-                # Create a new dataset for the field names
-                if 'unknown names' in h5file.keys():
-                    del h5file['unknown names']
-                h5file.create_dataset('unknown names', data=bnames)
-                mylog.info('Field List: %s', bnames)
+            if write_fields or sanitize_fieldnames:
+                with h5py.File(sfname, 'a') as h5file:
+                    # Add the new field names that have already been written
+                    all_fields = list(set(written_fields + exist_fields))
+                    # We need to encode the field name to binary format
+                    bnames = [f.encode('utf8') for f in all_fields]
+                    # Create a new dataset for the field names
+                    if 'unknown names' in h5file.keys():
+                        del h5file['unknown names']
+                    h5file.create_dataset('unknown names', data=bnames)
+                    mylog.info('Field List: %s', bnames)
         else:
-            pass
+            mylog.info('Done calculation')
