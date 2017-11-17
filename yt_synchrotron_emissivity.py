@@ -12,7 +12,9 @@ from yt.utilities.file_handler import HDF5FileHandler
 from yt.utilities.parallel_tools.parallel_analysis_interface import \
     parallel_objects, \
     communication_system, \
-    parallel_blocking_call
+    parallel_blocking_call, \
+    get_mpi_type, \
+    op_names
 #from yt.utilities.parallel_tools.task_queue import dynamic_parallel_objects
 from particles.particle_filters import *
 import time
@@ -501,8 +503,9 @@ def prep_field_data(ds, field, offset=1):
     """
     mylog.info('Calculating field: %s', field)
     comm = communication_system.communicators[-1]
+    dtype = 'float32'
     # data.shape should be (ngrid, nxb, nyb, nzb)
-    data = np.zeros([ds.index.num_grids, *ds.index.grid_dimensions[0]], dtype='float32')
+    data = np.zeros([ds.index.num_grids, *ds.index.grid_dimensions[0]], dtype=dtype)
     # Go through all the grids in the index
     if comm.rank == 0:
         t0 = time.time()
@@ -510,7 +513,7 @@ def prep_field_data(ds, field, offset=1):
     for g in parallel_objects(ds.index.grids, njobs=0):
         if comm.rank == 0:
             t1 = time.time()
-            sys.stdout.write('\rWorking on Grid %7i / %7i - %.3f s' 
+            sys.stdout.write('\rWorking on Grid %7i / %7i - %7.3f s'
                              % (g.id, ds.index.num_grids, t1-t1_prev))
             t1_prev = t1
         # Print the grid if nan or inf is in it
@@ -521,9 +524,10 @@ def prep_field_data(ds, field, offset=1):
         # Transpose the array since the array in FLASH is fortran-ordered
         data[g.id-offset] = np.nan_to_num(g[field].v.transpose())
     if comm.rank == 0:
-        sys.stdout.write(' - mpi_allreduce')
+        sys.stdout.write(' - mpi_reduce')
         t2 = time.time()
-    data = comm.mpi_allreduce(data, op="sum")
+    temp = data.copy()
+    comm.comm.Reduce([temp,get_mpi_type(dtype)], [data,get_mpi_type(dtype)], op=op_names['sum'])
     if comm.rank == 0:
         t3 = time.time()
         sys.stdout.write(' - Done!\nGrid Calculation: %.1f MPI: %.1f Total: %.1f\n'
