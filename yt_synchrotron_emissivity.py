@@ -369,16 +369,29 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
     deposit_field = 'particle_sync_spec_%s' % stokes.nu_str
 
     units = ds.field_info[deposit_field].units
-    field_name = "%s_nn_%s"
+    method = "nearest_weighted"
+    if method == "nearest":
+        field_name = "%s_nnw_%s"
+    elif method == "nearest_weighted":
+        field_name = "%s_nnw_%s"
+    else:
+        raise NotImplementedError
     field_name = field_name % (ptype, deposit_field.replace('particle_', ''))
     ad = ds.all_data()
     #print(ad[ptype, "particle_position"])
 
-    def _nn_deposit_field(field, data):
+    def _nnw_deposit_field(field, data):
         if isinstance(data, FieldDetector):
-            return data.deposit(data[ptype, "particle_position"],
-                    deposit_field, method="nearest")
+            jetfluid = data['velocity_magnitude'] > lobe_v
+            d = data.deposit(data[ptype, "particle_position"],
+                    deposit_field, method=method)
+            d[jetfluid] = 0.0
+            return d
         #pos = ad[ptype, "particle_position"]
+        if ptype == 'lobe':
+            # Calling other fields must preceed the more intensive
+            # deposit function to prevent repeated iterations
+            jetfluid = data['velocity_magnitude'] > lobe_v
         alldata = True
         if alldata:
             pos = ad[ptype, "particle_position"]
@@ -392,14 +405,16 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
             box = data.ds.box(left_edge, right_edge)
             pos = box[ptype, "particle_position"]
             fields = [box[ptype, deposit_field]]
-        d = data.deposit(pos, fields, method='nearest',
+        d = data.deposit(pos, fields, method=method,
                          extend_cells=extend_cells)
         d = data.ds.arr(d, input_units=units)
+        if ptype == 'lobe':
+            d[jetfluid] = 0.0
         return d
 
     fname_nn = ("deposit", field_name)
     ds.add_field(fname_nn,
-        function=_nn_deposit_field,
+        function=_nnw_deposit_field,
         sampling_type="cell",
         units=units,
         take_log=True,
@@ -517,8 +532,8 @@ def prep_field_data(ds, field, offset=1):
                              % (g.id, ds.index.num_grids, t1-t1_prev))
             t1_prev = t1
         # Print the grid if nan or inf is in it
-        if np.nan in g[field].v or np.inf in g[field].v:
-            mylog.warning('Encountered non-physical values in %s', g) # g[field].v)
+        #if np.nan in g[field].v or np.inf in g[field].v:
+        #    mylog.warning('Encountered non-physical values in %s', g) # g[field].v)
         # Calculate the field values in each grid
         # Use numpy nan_to_num to convert the bad values anyway
         # Transpose the array since the array in FLASH is fortran-ordered
