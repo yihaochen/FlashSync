@@ -242,7 +242,7 @@ def add_synchrotron_pol_emissivity(ds, ptype='jnsp', nu=(1.4, 'GHz'), method='ne
 
 
 def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
-                                    method='nearest', proj_axis='x',
+                                    method='nearest_weighted', proj_axis='x',
                                     extend_cells=16):
     me = yt.utilities.physical_constants.mass_electron #9.109E-28
     c  = yt.utilities.physical_constants.speed_of_light #2.998E10
