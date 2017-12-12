@@ -510,6 +510,16 @@ def synchrotron_file_name(ds, extend_cells=0):
     postfix = '_synchrotron_gc%i' % extend_cells
     return os.path.join(ds.directory, ds.basename + postfix)
 
+def synchrotron_fits_filename(ds, dir, ptype, proj_axis):
+    if proj_axis in ['x', 'y', 'z']:
+        fitsfname = 'synchrotron_%s_%s.fits' % (ptype, ds.basename[-4:])
+    else:
+        fitsfname = 'synchrotron_%s_%i_%i_%i_%s.fits' %\
+                (ptype, *proj_axis, ds.basename[-4:])
+    maindir = os.path.join(dir, 'cos_synchrotron_QU_nn_%s/' % ptype)
+    fitsdir = os.path.join(maindir, 'fits/')
+    return os.path.join(fitsdir, fitsfname)
+
 
 def prep_field_data(ds, field, offset=1):
     """
@@ -552,7 +562,7 @@ def prep_field_data(ds, field, offset=1):
 
 
 @parallel_blocking_call
-def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x',
+def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1400, 'MHz'), proj_axis='x',
         extend_cells=16, sanitize_fieldnames=False):
     """
     Calculate the emissivity of Stokes I, Q, and U in each cell. Write them
@@ -591,7 +601,7 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x',
                         exist_fields.append(field)
                         sanitize_fieldnames = True
                 mylog.info('Closing File: %s', h5file)
-            mylog.info('Fields already exist: %s', exist_fields)
+            mylog.info('Fields already exist: %s', sorted(exist_fields))
         else:
         # File does not exist
             pass
@@ -639,16 +649,19 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1.4, 'GHz'), proj_axis='x',
                         # Keep other simulation information
                         h5file.create_dataset(v.name, v.shape, v.dtype, v.value)
 
-            if write_fields or sanitize_fieldnames:
-                with h5py.File(sfname, 'a') as h5file:
-                    # Add the new field names that have already been written
-                    all_fields = list(set(written_fields + exist_fields))
-                    # We need to encode the field name to binary format
-                    bnames = [f.encode('utf8') for f in all_fields]
-                    # Create a new dataset for the field names
-                    if 'unknown names' in h5file.keys():
-                        del h5file['unknown names']
-                    h5file.create_dataset('unknown names', data=bnames)
-                    mylog.info('Field List: %s', bnames)
-        else:
-            mylog.info('Done calculation')
+    if write_fields or sanitize_fieldnames:
+        if comm.rank == 0:
+            with h5py.File(sfname, 'a') as h5file:
+                # Add the new field names that have already been written
+                all_fields = list(set(written_fields + exist_fields))
+                # Remove the field that does not exist in the dataset
+                for field in all_fields:
+                    if field not in h5file.keys():
+                        all_fields.remove(field)
+                # We need to encode the field name to binary format
+                bnames = [f.encode('utf8') for f in all_fields]
+                # Create a new dataset for the field names
+                if 'unknown names' in h5file.keys():
+                    del h5file['unknown names']
+                h5file.create_dataset('unknown names', data=bnames)
+                mylog.info('Field List: %s', sorted(bnames))
