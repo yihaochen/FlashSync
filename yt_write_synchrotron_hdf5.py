@@ -4,6 +4,7 @@ import os
 import yt
 yt.mylog.setLevel("INFO")
 import synchrotron.yt_synchrotron_emissivity as sync
+from itertools import chain
 
 yt.enable_parallelism(suppress_logging=True)
 
@@ -20,7 +21,9 @@ for ds in ts.piter():
     #sync.write_synchrotron_hdf5(ds, 'jetp', (150, 'MHz'), 'x', extend_cells=0)
     #sync.write_synchrotron_hdf5(ds, 'lobe', (150, 'MHz'), 'x', extend_cells=32)
     #sync.write_synchrotron_hdf5(ds, 'lobe', (1.4, 'GHz'), 'x', extend_cells=32)
-    for nu in [(150, 'MHz'), (233, 'MHz'), (325, 'MHz'), (610, 'MHz'), (1400, 'MHz')]:
+    nus = chain(range(100,200,25), range(200,900,50), range(900,1500,100))
+    #nus = [100,150,300,600,1400,8000]
+    for nu in [(nu, 'MHz') for nu in nus]:
     #for nu in [(150, 'MHz'), (1400, 'MHz')]:
-        sync.write_synchrotron_hdf5(ds, 'lobe', nu, [2,0,1], extend_cells=32, sanitize_fieldnames=True)
+        #sync.write_synchrotron_hdf5(ds, 'lobe', nu, [1,0,2], extend_cells=32, sanitize_fieldnames=True)
         sync.write_synchrotron_hdf5(ds, 'lobe', nu, 'x', extend_cells=32, sanitize_fieldnames=True)
