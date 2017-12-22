@@ -506,7 +506,7 @@ def setup_part_file(ds):
         return False
 
 
-def synchrotron_file_name(ds, extend_cells=0):
+def synchrotron_filename(ds, extend_cells=0):
     postfix = '_synchrotron_gc%i' % extend_cells
     return os.path.join(ds.directory, ds.basename + postfix)
 
@@ -570,7 +570,7 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1400, 'MHz'), proj_axis='x',
     The new HDF5 file can then be loaded into yt and make plots.
     """
     # The new file name that we are going to write to
-    sfname = synchrotron_file_name(ds, extend_cells=extend_cells)
+    sfname = synchrotron_filename(ds, extend_cells=extend_cells)
 
     h5_handle = ds._handle
 

@@ -39,8 +39,8 @@ def worker_fn(file):
     #for nu in nus:
     #    write_synchrotron_hdf5(ds, ptype, nu, proj_axis)#, extend_cells=None)
 
-    if not os.path.isfile(synchrotron_file_name(ds, extend_cells=gc)):
-        return ds.directory, 'sync file not found %s' % synchrotron_file_name(ds, extend_cells=gc)
+    if not os.path.isfile(synchrotron_filename(ds, extend_cells=gc)):
+        return ds.directory, 'sync file not found %s' % synchrotron_filename(ds, extend_cells=gc)
     maindir = os.path.join(file.pathname, 'cos_synchrotron_QU_nn_%s/' % ptype)
     if proj_axis != 'x':
         maindir = os.path.join(maindir, '%i_%i_%i' % tuple(proj_axis))
@@ -48,7 +48,7 @@ def worker_fn(file):
     else:
         histdir = os.path.join(maindir, 'histogram_gaussian%i_%s' % (sigma, proj_axis))
 
-    ds_sync = yt.load(synchrotron_file_name(ds, extend_cells=gc))
+    ds_sync = yt.load(synchrotron_filename(ds, extend_cells=gc))
     width = ds_sync.domain_width[1:]/zoom_fac
     res = ds_sync.domain_dimensions[1:]*ds_sync.refine_by**ds_sync.index.max_level//zoom_fac//2
     psi, frac = {}, {}

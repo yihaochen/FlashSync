@@ -20,7 +20,7 @@ except IndexError:
 
 for ds in ts.piter():
     stokes = sync.StokesFieldName('lobe', (1.4, 'GHz'), 'x')
-    sfname = sync.synchrotron_file_name(ds, extend_cells=32)
+    sfname = sync.synchrotron_filename(ds, extend_cells=32)
     with h5py.File(sfname, 'a') as h5f:
         for field in stokes.IQU:
             if field[1] in h5f.keys():
