@@ -18,6 +18,7 @@ from yt.utilities.parallel_tools.parallel_analysis_interface import \
 #from yt.utilities.parallel_tools.task_queue import dynamic_parallel_objects
 from particles.particle_filters import *
 import time
+import re
 
 
 class StokesFieldName(object):
@@ -496,11 +497,11 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
 def setup_part_file(ds):
     filename = os.path.join(ds.directory,ds.basename)
-    updated_pfname = filename.replace('plt_cnt', 'part')+'_updated'
+    updated_pfname = re.sub(r'_synchrotron_gc.*','',filename).replace('plt_cnt', 'part')+'_updated'
     if os.path.exists(updated_pfname):
         ds._particle_handle = HDF5FileHandler(updated_pfname)
         ds.particle_filename = filename.replace('plt_cnt', 'part')+'_updated'
-        mylog.debug('Changed particle files to: %s', ds.particle_filename)
+        mylog.info('Changed particle files to: %s', ds.particle_filename)
         return True
     else:
         return False
