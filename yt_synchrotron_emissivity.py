@@ -511,14 +511,15 @@ def synchrotron_filename(ds, extend_cells=0):
     postfix = '_synchrotron_gc%i' % extend_cells
     return os.path.join(ds.directory, ds.basename + postfix)
 
-def synchrotron_fits_filename(ds, dir, ptype, proj_axis):
+def synchrotron_fits_filename(ds, dir, ptype, proj_axis, mock_observation=False):
     if proj_axis in ['x', 'y', 'z']:
         fitsfname = 'synchrotron_%s_%s.fits' % (ptype, ds.basename[-4:])
     else:
         fitsfname = 'synchrotron_%s_%i_%i_%i_%s.fits' %\
                 (ptype, *proj_axis, ds.basename[-4:])
     maindir = os.path.join(dir, 'cos_synchrotron_QU_nn_%s/' % ptype)
-    fitsdir = os.path.join(maindir, 'fits/')
+    fitsdir = 'fits_obs/' if mock_observation else 'fits/'
+    fitsdir = os.path.join(maindir, fitsdir)
     return os.path.join(fitsdir, fitsfname)
 
 
