@@ -244,7 +244,7 @@ def add_synchrotron_pol_emissivity(ds, ptype='jnsp', nu=(1.4, 'GHz'), method='ne
 
 def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
                                     method='nearest_weighted', proj_axis='x',
-                                    extend_cells=16):
+                                    extend_cells=32):
     me = yt.utilities.physical_constants.mass_electron #9.109E-28
     c  = yt.utilities.physical_constants.speed_of_light #2.998E10
     e  = yt.utilities.physical_constants.elementary_charge #4.803E-10 esu
@@ -369,7 +369,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
     deposit_field = 'particle_sync_spec_%s' % stokes.nu_str
 
-    units = ds.field_info[deposit_field].units
+    sync_unit = ds.field_info[deposit_field].units
     method = "nearest_weighted"
     if method == "nearest":
         field_name = "%s_nnw_%s"
@@ -408,7 +408,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
             fields = [box[ptype, deposit_field]]
         d = data.deposit(pos, fields, method=method,
                          extend_cells=extend_cells)
-        d = data.ds.arr(d, input_units=units)
+        d = data.ds.arr(d, input_units=sync_unit)
         if ptype == 'lobe':
             d[jetfluid] = 0.0
         return d
@@ -417,7 +417,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
     ds.add_field(fname_nn,
         function=_nnw_deposit_field,
         sampling_type="cell",
-        units=units,
+        units=sync_unit,
         take_log=True,
         force_override=True,
         validators=[ValidateSpatial()])
@@ -497,10 +497,10 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
 def setup_part_file(ds):
     filename = os.path.join(ds.directory,ds.basename)
-    updated_pfname = re.sub(r'_synchrotron_gc.*','',filename).replace('plt_cnt', 'part')+'_updated'
+    updated_pfname = re.sub(r'_synchrotron_.*','',filename).replace('plt_cnt', 'part')+'_updated'
     if os.path.exists(updated_pfname):
         ds._particle_handle = HDF5FileHandler(updated_pfname)
-        ds.particle_filename = filename.replace('plt_cnt', 'part')+'_updated'
+        ds.particle_filename = updated_pfname
         mylog.info('Changed particle files to: %s', ds.particle_filename)
         return True
     else:
@@ -549,7 +549,7 @@ def prep_field_data(ds, field, offset=1):
         # Calculate the field values in each grid
         # Use numpy nan_to_num to convert the bad values anyway
         # Transpose the array since the array in FLASH is fortran-ordered
-        data[g.id-offset] = np.nan_to_num(g[field].v.transpose())
+        data[g.id-offset] = np.nan_to_num(g[field].in_units('Jy/cm/arcsec**2').v.transpose())
     if comm.rank == 0:
         sys.stdout.write(' - mpi_reduce')
         t2 = time.time()
