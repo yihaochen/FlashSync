@@ -39,23 +39,23 @@ except IndexError:
 
 mock_observation = False
 
-if mock_observation:
-    # Assumed distance to the object
-    dist_obj = 165.95*yt.units.Mpc
-    # Assumed coordinate of the object
-    coord = [229.5, 42.82]
-
 #nus = [(nu, 'MHz') for nu in chain(range(100,200,25), range(200,900,50), range(900,1500,100))]
 nus = [(nu, 'MHz') for nu in [100,150,300,600,1400,8000]]
 
 zoom_fac = 8
-proj_axis = [1,0,2]
-#proj_axis = 'x'
+#proj_axis = [1,0,2]
+proj_axis = 'x'
 ptype = 'lobe'
 gc = 32
 maindir = os.path.join(dir, 'cos_synchrotron_QU_nn_%s/' % ptype)
 fitsdir = 'fits_obs/' if mock_observation else 'fits/'
 fitsdir = os.path.join(maindir, fitsdir)
+
+if mock_observation:
+    # Assumed distance to the object
+    dist_obj = 165.95*yt.units.Mpc
+    # Assumed coordinate of the object
+    coord = [229.5, 42.82]
 
 if yt.is_root():
     for subdir in [maindir, fitsdir]:
