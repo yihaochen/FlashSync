@@ -141,7 +141,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
         # The new cutoff gamma
         # Note that particle_dens could be negative due to quadratic interpolation!
-        gamc = (np.abs(data['particle_dens'] / den1))**(1./3.) \
+        gamc = (np.abs(data['particle_dens'] / data['particle_den0']))**(1./3.) \
                / (dtau + np.finfo(np.float64).tiny)
         ind = np.where(gamc < 0.0)[0]
         if ind.shape[0] > 0:
