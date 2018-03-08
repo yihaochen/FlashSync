@@ -137,84 +137,79 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
         ds.add_field(('gas', 'jet_volume_fraction'), function=_jet_volume_fraction,
                      display_name="Jet Volume Fraction", sampling_type='cell')
 
-    def _gamc(field, data):
-        # Density when the particle left the jet
-        #den1 = data['particle_den1']
-        dtau = data['particle_dtau']
-
-        # The new cutoff gamma
-        # Note that particle_dens could be negative due to quadratic interpolation!
-        gamc = (np.abs(data['particle_dens'] / data['particle_den0']))**(1./3.) \
-               / (dtau + np.finfo(np.float64).tiny)
-        ind = np.where(gamc < 0.0)[0]
-        if ind.shape[0] > 0:
-            print(ind)
-            print(gamc)
-
-        return gamc
-
-    pfname = 'particle_gamc_dtau'
-    ds.add_field(pfname, function=_gamc, sampling_type='particle',
-                 units='', force_override=True)
-
-    #def _synchrotron_spec(field, data):
-    #    # To convert from FLASH "none" unit to cgs unit, times the B field from FLASH by sqrt(4*pi)
-    #    Bvec = np.array([data['particle_magx'],\
-    #                     data['particle_magy'],\
-    #                     data['particle_magz']])*np.sqrt(4.0*np.pi)
-    #    Bvec = data.apply_units(Bvec, 'gauss')
-
-    #    # Calculate sin(a), in which a is the pitch angle of the electrons relative to B field.
-    #    # See _nn_emissivity_i for more comments
-    #    cross = np.cross(los, Bvec, axisb=0)
-    #    Bsina = np.sqrt(np.sum(cross*cross, axis=-1))
-    #    Bsina = data.apply_units(Bsina, 'gauss')
-    #    #B = np.sqrt(np.sum(Bvec*Bvec, axis=0))
-
-    #    # Return for the FieldDetector; do nothing
-    #    if isinstance(data, FieldDetector):
-    #        return data['particle_dens']/data['particle_den1']**(1./3.)/ \
-    #                (data['particle_dtau'])
-
-    #    # Density when the particle left the jet
-    #    den1 = data['particle_den1']
-    #    dtau = data['particle_dtau']
-
-    #    if np.any(dtau < 0.0):
-    #        print('negative tau!')
-    #        print(data)
-    #        print(data['particle_tau'])
-    #        print(dtau)
-
+    #def _gamc(field, data):
     #    # The new cutoff gamma
     #    # Note that particle_dens could be negative due to quadratic interpolation!
-    #    gamc = (np.abs(data['particle_dens'] / den1))**(1./3.) \
-    #           / (dtau + np.finfo(np.float64).tiny)
-    #    ind = np.where(gamc <= 0.0)[0]
+    #    gamc = (np.abs(data['particle_dens'] / data['particle_den0']))**(1./3.) \
+    #           / (data['particle_dtau'] + np.finfo(np.float64).tiny)
+    #    ind = np.where(gamc < 0.0)[0]
     #    if ind.shape[0] > 0:
     #        print(ind)
     #        print(gamc)
 
-    #    #gamc = data[(ptype, 'particle_gamc')]
+    #    return gamc
 
-    #    # Cutoff frequency
-    #    nuc = 3.0*gamc**2*e*Bsina/(4.0*np.pi*me*c)
-    #    #nu = data.get_field_parameter("frequency", default=yt.YTQuantity(1.4, 'GHz'))
+    #pfname = 'particle_gamc_dtau'
+    #ds.add_field(pfname, function=_gamc, sampling_type='particle',
+    #             units='', force_override=True)
+    #deposit_field = 'particle_gamc_dtau'
 
-    #    # B**1.5 is taken from the grid data
-    #    norm = 3.0/8.0*e**3.5/(c**2.5*me**1.5*(np.pi)**0.5)
-    #    # P is taken from the grid data
-    #    N0 = 3.0/me/c/c/(np.log(gamc/gamma_min))/yt.YTQuantity(4.*np.pi, 'sr')
+    def _synchrotron_spec(field, data):
+        # To convert from FLASH "none" unit to cgs unit, times the B field from FLASH by sqrt(4*pi)
+        Bvec = np.array([data['particle_magx'],\
+                         data['particle_magy'],\
+                         data['particle_magz']])*np.sqrt(4.0*np.pi)
+        Bvec = data.apply_units(Bvec, 'gauss')
 
-    #    # Fix where the cutoff gamma < 0
-    #    N0[ind] = 0.0
+        # Calculate sin(a), in which a is the pitch angle of the electrons relative to B field.
+        # See _nn_emissivity_i for more comments
+        cross = np.cross(los, Bvec, axisb=0)
+        Bsina = np.sqrt(np.sum(cross*cross, axis=-1))
+        Bsina = data.apply_units(Bsina, 'gauss')
+        #B = np.sqrt(np.sum(Bvec*Bvec, axis=0))
 
-    #    return np.clip(N0*norm*nu**(-0.5)*np.exp(-nu/nuc), np.finfo(np.float64).tiny, None)
+        # Return for the FieldDetector; do nothing
+        if isinstance(data, FieldDetector):
+            return data['particle_dens']/data['particle_den0']**(1./3.)/ \
+                    (data['particle_dtau'])
 
-    ## particle field name
-    #pfname = 'particle_sync_spec_%s' % stokes.nu_str
-    #ds.add_field(pfname, function=_synchrotron_spec, sampling_type='particle',
-    #             units='cm**(3/4)*s**(3/2)/g**(3/4)/sr', force_override=True)
+        if np.any(data['particle_dtau'] < 0.0):
+            print('negative tau!')
+            print(data)
+            print(data['particle_tau'])
+            print(data['particle_dtau'])
+
+        # The new cutoff gamma
+        # Note that particle_dens could be negative due to quadratic interpolation!
+        gamc = (np.abs(data['particle_dens'] / data['particle_den0']))**(1./3.) \
+               / (data['particle_dtau'] + np.finfo(np.float64).tiny)
+        ind = np.where(gamc <= 0.0)[0]
+        if ind.shape[0] > 0:
+            print(ind)
+            print(gamc)
+
+        #gamc = data[(ptype, 'particle_gamc')]
+
+        # Cutoff frequency
+        nuc = 3.0*gamc**2*e*Bsina/(4.0*np.pi*me*c)
+        #nu = data.get_field_parameter("frequency", default=yt.YTQuantity(1.4, 'GHz'))
+
+        # B**1.5 is taken from the grid data
+        norm = 3.0/8.0*e**3.5/(c**2.5*me**1.5*(np.pi)**0.5)
+        # P is taken from the grid data
+        N0 = 3.0/me/c/c/(np.log(gamc/gamma_min))/yt.YTQuantity(4.*np.pi, 'sr')
+
+        # Fix where the cutoff gamma < 0
+        N0[ind] = 0.0
+
+        return np.clip(N0*norm*nu**(-0.5)*np.exp(-nu/nuc), np.finfo(np.float64).tiny, None)
+
+    # particle field name
+    pfname = 'particle_sync_spec_%s' % stokes.nu_str
+    ds.add_field(pfname, function=_synchrotron_spec, sampling_type='particle',
+                 units='cm**(3/4)*s**(3/2)/g**(3/4)/sr', force_override=True)
+    deposit_field = pfname
+
     #try:
     ds.add_particle_filter(ptype)
     #except:
@@ -225,9 +220,6 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
     ###########################################################################
     #fname_nn = ds.add_deposited_particle_field(
     #        (ptype, 'particle_sync_spec_%s' % stokes.nu_str), 'nearest', extend_cells=extend_cells)
-
-    #deposit_field = 'particle_sync_spec_%s' % stokes.nu_str
-    deposit_field = 'particle_gamc_dtau'
 
     sync_unit = ds.field_info[deposit_field].units
     if method == "nearest":
@@ -244,7 +236,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
         if isinstance(data, FieldDetector):
             jetfluid = data['velocity_magnitude'] > lobe_v
             d = data.deposit(data[ptype, "particle_position"],
-                    deposit_field, method=method)
+                    (ptype, deposit_field), method=method)
             d[jetfluid] = 0.0
             return d
         #pos = ad[ptype, "particle_position"]
@@ -256,7 +248,8 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
         if alldata:
             pos = ad[ptype, "particle_position"]
             # Deposit using the distance weighted log field
-            fields = [np.log(ad[ptype, deposit_field])]
+            #fields = [np.log(ad[ptype, deposit_field])]
+            fields = [ad[ptype, deposit_field]]
             fields = [np.ascontiguousarray(f) for f in fields]
         else:
             left_edge = np.maximum(data.LeftEdge-data.dds*extend_cells,\
@@ -272,7 +265,8 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
             d = data.ds.arr(d, input_units=sync_unit)
         else:
             # Conver the log back to real value
-            d = data.ds.arr(np.exp(d), input_units=sync_unit)
+            #d = data.ds.arr(np.exp(d), input_units=sync_unit)
+            d = data.ds.arr(d, input_units=sync_unit)
         if ptype == 'lobe':
             d[jetfluid] = 0.0
         return d
@@ -303,23 +297,28 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
         Bsina = np.sqrt(np.sum(cross*cross, axis=-1))
         Bsina = data.apply_units(Bsina, 'gauss')
 
+        # P * (B*sina)^1.5
+        PBsina = data['gas', 'pressure']*Bsina**1.5
+
         frac = data['gas', 'jet_volume_fraction']
 
-        # fname_nn = ptype_nnw_gamc_dtau
-        if ('flash', fname_nn) in data.ds.field_list:
-            gamc = data[('flash', fname_nn)]
-        else:
-            gamc = data[('deposit', fname_nn)]
-        bad_mask = gamc <= gamma_min
-        # Cutoff frequency
-        nuc = 3.0*gamc**2*e*Bsina/(4.0*np.pi*me*c)
-        #nu = data.get_field_parameter("frequency", default=yt.YTQuantity(1.4, 'GHz'))
+        # Use gamc from deposit field
+        #############################
+        # fname_nn = 'ptype_nnw_gamc_dtau'
+        #if ('flash', fname_nn[1]) in data.ds.field_list:
+        #    gamc = data[('flash', fname_nn[1])]
+        #else:
+        #    gamc = data[fname_nn]
+        #bad_mask = gamc <= gamma_min
+        ## Cutoff frequency
+        #nuc = 3.0*gamc**2*e*Bsina/(4.0*np.pi*me*c)
+        ##nu = data.get_field_parameter("frequency", default=yt.YTQuantity(1.4, 'GHz'))
 
-        norm = 3.0*Bsina**1.5/8.0*e**3.5/(c**2.5*me**1.5*(np.pi)**0.5)
-        N0 = 3.0*data['gas', 'pressure']/me/c/c/(np.log(gamc/gamma_min))/yt.YTQuantity(4.*np.pi, 'sr')
-        N0[bad_mask] = 0.0
+        #norm = 3.0*Bsina**1.5/8.0*e**3.5/(c**2.5*me**1.5*(np.pi)**0.5)
+        #N0 = 3.0*data['gas', 'pressure']/me/c/c/(np.log(gamc/gamma_min))/yt.YTQuantity(4.*np.pi, 'sr')
+        #N0[bad_mask] = 0.0
 
-        return np.clip(frac*N0*norm*tot_const*nu**(-0.5)*np.exp(-nu/nuc), np.finfo(np.float64).tiny, None)
+        return PBsina*frac*tot_const*data[fname_nn]
 
 
     ds.add_field(stokes.I, function=_nn_emissivity_i, sampling_type='cell',
@@ -384,7 +383,7 @@ def setup_part_file(ds):
 
 
 def synchrotron_filename(ds, extend_cells=None):
-    postfix = '_synchrotron_peak_gamc'
+    postfix = '_synchrotron_peak'
     postfix = postfix+'_gc%i' % extend_cells if extend_cells else postfix
     return os.path.join(ds.directory, ds.basename + postfix)
 
@@ -394,7 +393,7 @@ def synchrotron_fits_filename(ds, dir, ptype, proj_axis, mock_observation=False)
     else:
         fitsfname = 'synchrotron_%s_%i_%i_%i_%s.fits' %\
                 (ptype, *proj_axis, ds.basename[-4:])
-    maindir = os.path.join(dir, 'cos_synchrotron_QU_nn_%s/' % ptype)
+    maindir = os.path.join(dir, 'synchrotron_peak_%s/' % ptype)
     fitsdir = 'fits_obs/' if mock_observation else 'fits/'
     fitsdir = os.path.join(maindir, fitsdir)
     return os.path.join(fitsdir, fitsfname)

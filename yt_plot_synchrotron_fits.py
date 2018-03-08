@@ -46,8 +46,8 @@ zoom_fac = 8
 #proj_axis = [1,0,2]
 proj_axis = 'x'
 ptype = 'lobe'
-gc = 32
-maindir = os.path.join(dir, 'cos_synchrotron_QU_nn_%s/' % ptype)
+gc = 8
+maindir = os.path.join(dir, 'synchrotron_peak_%s/' % ptype)
 fitsdir = 'fits_obs/' if mock_observation else 'fits/'
 fitsdir = os.path.join(maindir, fitsdir)
 
