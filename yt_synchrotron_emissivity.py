@@ -75,6 +75,9 @@ def _jet_volume_fraction(field, data):
 
     icm_volume_fraction = np.where(icm_volume_fraction < 1.0, icm_volume_fraction, 1.0)
 
+    # Cutoff where jet volume fraction is smaller than 5%
+    icm_volume_fraction = np.where(icm_volume_fraction > 0.95, 1.0, icm_volume_fraction)
+
     return 1.0 - icm_volume_fraction
 
 
@@ -136,7 +139,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
     def _gamc(field, data):
         # Density when the particle left the jet
-        den1 = data['particle_den1']
+        #den1 = data['particle_den1']
         dtau = data['particle_dtau']
 
         # The new cutoff gamma
@@ -228,7 +231,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
     sync_unit = ds.field_info[deposit_field].units
     if method == "nearest":
-        field_name = "%s_nnw_%s"
+        field_name = "%s_nn_%s"
     elif method == "nearest_weighted":
         field_name = "%s_nnw_%s"
     else:
@@ -252,6 +255,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
         alldata = True
         if alldata:
             pos = ad[ptype, "particle_position"]
+            # Deposit using the distance weighted log field
             fields = [np.log(ad[ptype, deposit_field])]
             fields = [np.ascontiguousarray(f) for f in fields]
         else:
@@ -267,6 +271,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
         if np.all(d == 0.0):
             d = data.ds.arr(d, input_units=sync_unit)
         else:
+            # Conver the log back to real value
             d = data.ds.arr(np.exp(d), input_units=sync_unit)
         if ptype == 'lobe':
             d[jetfluid] = 0.0
@@ -300,7 +305,11 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
         frac = data['gas', 'jet_volume_fraction']
 
-        gamc = data[fname_nn]
+        # fname_nn = ptype_nnw_gamc_dtau
+        if ('flash', fname_nn) in data.ds.field_list:
+            gamc = data[('flash', fname_nn)]
+        else:
+            gamc = data[('deposit', fname_nn)]
         bad_mask = gamc <= gamma_min
         # Cutoff frequency
         nuc = 3.0*gamc**2*e*Bsina/(4.0*np.pi*me*c)
@@ -364,7 +373,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
 
 def setup_part_file(ds):
     filename = os.path.join(ds.directory,ds.basename)
-    updated_pfname = re.sub(r'_synchrotron_.*','',filename).replace('plt_cnt', 'part')+'_updated'
+    updated_pfname = re.sub(r'_synchrotron_.*','',filename).replace('plt_cnt', 'part')+'_updated_peak'
     if os.path.exists(updated_pfname):
         ds._particle_handle = HDF5FileHandler(updated_pfname)
         ds.particle_filename = updated_pfname
@@ -374,8 +383,9 @@ def setup_part_file(ds):
         return False
 
 
-def synchrotron_filename(ds, extend_cells=0):
-    postfix = '_synchrotron_gamc_gc%i' % extend_cells
+def synchrotron_filename(ds, extend_cells=None):
+    postfix = '_synchrotron_peak_gamc'
+    postfix = postfix+'_gc%i' % extend_cells if extend_cells else postfix
     return os.path.join(ds.directory, ds.basename + postfix)
 
 def synchrotron_fits_filename(ds, dir, ptype, proj_axis, mock_observation=False):
@@ -416,7 +426,8 @@ def prep_field_data(ds, field, offset=1):
         # Calculate the field values in each grid
         # Use numpy nan_to_num to convert the bad values anyway
         # Transpose the array since the array in FLASH is fortran-ordered
-        data[g.id-offset] = np.nan_to_num(g[field].in_units('Jy/cm/arcsec**2').v.transpose())
+        #data[g.id-offset] = np.nan_to_num(g[field].in_units('Jy/cm/arcsec**2').v.transpose())
+        data[g.id-offset] = np.nan_to_num(g[field].v.transpose())
     if comm.rank == 0:
         sys.stdout.write(' - mpi_reduce')
         t2 = time.time()
@@ -431,8 +442,7 @@ def prep_field_data(ds, field, offset=1):
 
 
 @parallel_blocking_call
-def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1400, 'MHz'), proj_axis='x',
-        extend_cells=16, sanitize_fieldnames=False):
+def write_synchrotron_hdf5(ds, write_fields, sanitize_fieldnames=False, extend_cells=None):
     """
     Calculate the emissivity of Stokes I, Q, and U in each cell. Write them
     to a new HDF5 file and copy metadata from the original HDF5 files.
@@ -445,10 +455,9 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1400, 'MHz'), proj_axis='x',
 
     # Keep a list of the fields that were in the original hdf5 file
     orig_field_list = [field.decode() for field in h5_handle['unknown names'].value[:,0]]
-    # Field names that we are going to write to the new hdf5 file
-    stokes = StokesFieldName(ptype, nu, proj_axis)
-    # Take only the field name, discard "deposit" field type
-    write_fields = [f for ftype, f in stokes.IQU]
+
+    if not isinstance(write_fields, list):
+        write_fields = [write_fields]
 
     comm = communication_system.communicators[-1]
     # Only do the IO in the master process
@@ -481,9 +490,6 @@ def write_synchrotron_hdf5(ds, ptype='lobe', nu=(1400, 'MHz'), proj_axis='x',
 
     if write_fields:
         mylog.info('Fields to be generated: %s', write_fields)
-        pars = add_synchrotron_dtau_emissivity(ds, ptype=ptype, nu=nu,
-                                               proj_axis=proj_axis,
-                                               extend_cells=extend_cells)
         if comm.rank == 0:
             wdata = {}
         for field in write_fields:

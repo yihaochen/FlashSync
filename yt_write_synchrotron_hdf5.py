@@ -9,6 +9,8 @@ from itertools import chain
 yt.enable_parallelism(suppress_logging=True)
 
 dir = './data/'
+ptype = 'lobe'
+proj_axis = 'x'
 
 try:
     ind = int(sys.argv[1])
@@ -28,4 +30,10 @@ for ds in ts.piter():
         # The two projection axes cannot be completed at the same time
         # Remember to comment out one of the following lines
         #sync.write_synchrotron_hdf5(ds, 'lobe', nu, [1,0,2], extend_cells=32, sanitize_fieldnames=True)
-        sync.write_synchrotron_hdf5(ds, 'lobe', nu, 'x', extend_cells=32, sanitize_fieldnames=True)
+        pars = sync.add_synchrotron_dtau_emissivity(ds, ptype=ptype, nu=nu,
+                                           proj_axis=proj_axis, extend_cells=32)
+        # Field names that we are going to write to the new hdf5 file
+        stokes = sync.StokesFieldName(ptype, nu, proj_axis)
+        # Take only the field name, discard "deposit" field type
+        write_fields = [f for ftype, f in stokes.IQU]
+        sync.write_synchrotron_hdf5(ds, write_fields, extend_cells=32, sanitize_fieldnames=True)
