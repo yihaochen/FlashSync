@@ -128,10 +128,17 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
     yvec = np.array(yvec)
     los = los/np.sqrt(np.sum(los*los))
 
-    # Update the particle file handler in yt; raise exception if not successful
-    success = setup_part_file(ds)
-    if not success:
-        raise IOError
+    # Determine the version of the simulation
+    if 'particle_tau1' in ds.field_list:
+        version = 2018
+    elif 'particle_type' in ds.field_list:
+        version = 2016
+    else:
+        version = 2015
+        # Update the particle file handler in yt; raise exception if not successful
+        success = setup_part_file(ds)
+        if not success:
+            raise IOError
 
     if ('gas', 'jet_volume_fraction') not in ds.derived_field_list:
         ds.add_field(('gas', 'jet_volume_fraction'), function=_jet_volume_fraction,
@@ -168,25 +175,37 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
         Bsina = data.apply_units(Bsina, 'gauss')
         #B = np.sqrt(np.sum(Bvec*Bvec, axis=0))
 
-        # Return for the FieldDetector; do nothing
-        if isinstance(data, FieldDetector):
-            return data['particle_dens']/data['particle_den0']**(1./3.)/ \
-                    (data['particle_dtau'])
 
-        if np.any(data['particle_dtau'] < 0.0):
-            print('negative tau!')
-            print(data)
-            print(data['particle_tau'])
-            print(data['particle_dtau'])
 
-        # The new cutoff gamma
-        # Note that particle_dens could be negative due to quadratic interpolation!
-        gamc = (np.abs(data['particle_dens'] / data['particle_den0']))**(1./3.) \
-               / (data['particle_dtau'] + np.finfo(np.float64).tiny)
-        ind = np.where(gamc <= 0.0)[0]
-        if ind.shape[0] > 0:
-            print(ind)
-            print(gamc)
+        if version == 2018:
+            # Return for the FieldDetector; do nothing
+            if isinstance(data, FieldDetector):
+                return data['particle_dens']/data['particle_den0']**(1./3.)/ \
+                        (data['particle_tau1']+data['particle_cmb1'])
+
+            gamc = (np.abs(data['particle_dens'] / data['particle_den0']))**(1./3.) \
+                   / (data['particle_tau1'] + data['particle_cmb1'] + np.finfo(np.float64).tiny)
+        else:
+            # Return for the FieldDetector; do nothing
+            if isinstance(data, FieldDetector):
+                return data['particle_dens']/data['particle_den0']**(1./3.)/ \
+                        (data['particle_dtau'])
+
+            if np.any(data['particle_dtau'] < 0.0):
+                print('negative tau!')
+                print(data)
+                print(data['particle_tau'])
+                print(data['particle_dtau'])
+
+            # The new cutoff gamma
+            # Note that particle_dens could be negative due to quadratic interpolation!
+            gamc = (np.abs(data['particle_dens'] / data['particle_den0']))**(1./3.) \
+                   / (data['particle_dtau'] + np.finfo(np.float64).tiny)
+
+            ind = np.where(gamc <= 0.0)[0]
+            if ind.shape[0] > 0:
+                print(ind)
+                print(gamc[ind])
 
         #gamc = data[(ptype, 'particle_gamc')]
 
@@ -393,7 +412,9 @@ def synchrotron_fits_filename(ds, dir, ptype, proj_axis, mock_observation=False)
     else:
         fitsfname = 'synchrotron_%s_%i_%i_%i_%s.fits' %\
                 (ptype, *proj_axis, ds.basename[-4:])
-    maindir = os.path.join(dir, 'synchrotron_peak_%s/' % ptype)
+    if dir.split('/')[-1] == 'data':
+        dir = dir.rstrip('data')
+    maindir = os.path.join(dir, 'synchrotron_%s/' % ptype)
     fitsdir = 'fits_obs/' if mock_observation else 'fits/'
     fitsdir = os.path.join(maindir, fitsdir)
     return os.path.join(fitsdir, fitsfname)
