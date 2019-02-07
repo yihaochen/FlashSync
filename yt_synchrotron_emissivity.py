@@ -129,14 +129,17 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
     los = los/np.sqrt(np.sum(los*los))
 
     # Determine the version of the simulation
-    if 'particle_tau1' in ds.field_list:
+    if ('io', 'particle_tau1') in ds.field_list:
         version = 2018
-    elif 'particle_type' in ds.field_list:
+        mylog.info('Field particle_tau1 detected. This is a version 2018 simulation.')
+    elif ('io', 'particle_type') in ds.field_list:
         version = 2016
+        mylog.info('Field particle_type detected. This is a version 2016 simulation.')
     else:
         version = 2015
         # Update the particle file handler in yt; raise exception if not successful
         success = setup_part_file(ds)
+        mylog.info('Assuming this is a version 2015 simulation.')
         if not success:
             raise IOError
 
@@ -202,10 +205,10 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
             gamc = (np.abs(data['particle_dens'] / data['particle_den0']))**(1./3.) \
                    / (data['particle_dtau'] + np.finfo(np.float64).tiny)
 
-            ind = np.where(gamc <= 0.0)[0]
-            if ind.shape[0] > 0:
-                print(ind)
-                print(gamc[ind])
+        ind = np.where(gamc <= 0.0)[0]
+        if ind.shape[0] > 0:
+            print(ind)
+            print(gamc[ind])
 
         #gamc = data[(ptype, 'particle_gamc')]
 
