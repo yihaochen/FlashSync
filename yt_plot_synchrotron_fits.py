@@ -22,40 +22,36 @@ from synchrotron.yt_synchrotron_emissivity import\
         synchrotron_filename,\
         synchrotron_fits_filename,\
         StokesFieldName
+from tools import setup_cl
 
-
-#dir = '/d/d5/ychen/2015_production_runs/0204_h0_10Myr'
 dir = './'
-#dir = '/home/ychen/data/0only_0605_h0/'
-#dir = '/home/ychen/data/0only_1022_h1_10Myr/'
-#dir = '/d/d5/ychen/2015_production_runs/1022_h1_10Myr'
-#ts = yt.DatasetSeries(os.path.join(dir,'*_hdf5_plt_cnt_0640'), parallel=1, setup_function=setup_part_file)
-#ts = yt.DatasetSeries(os.path.join(dir,'*_hdf5_plt_cnt_0910'), parallel=1, setup_function=setup_part_file)
 try:
     ind = int(sys.argv[1])
-    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_%03d0' % ind), parallel=1, setup_function=setup_part_file)
+    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_%04d' % ind), parallel=1, setup_function=setup_part_file)
 except IndexError:
-    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_???0'), parallel=5, setup_function=setup_part_file)
+    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_??00'), parallel=0, setup_function=setup_part_file)
 
-mock_observation = False
+mock_observation = True
 
-#nus = [(nu, 'MHz') for nu in chain(range(100,200,25), range(200,900,50), range(900,1500,100))]
-nus = [(nu, 'MHz') for nu in [100,150,300,600,1400,8000]]
+nus = [(nu, 'MHz') for nu in [100,300,600,1400,8000]]
+#nus = [(nu, 'MHz') for nu in [100,1400]]
 
-zoom_fac = 8
+zoom_fac = 4
+res = [512, 1024]# if zoom_fac == 8 else [1024, 2048]
 #proj_axis = [1,0,2]
 proj_axis = 'x'
 ptype = 'lobe'
 gc = 8
-maindir = os.path.join(dir, 'synchrotron_peak_%s/' % ptype)
+maindir = os.path.join(dir, 'synchrotron_%s/' % ptype)
 fitsdir = 'fits_obs/' if mock_observation else 'fits/'
 fitsdir = os.path.join(maindir, fitsdir)
 
 if mock_observation:
     # Assumed distance to the object
-    dist_obj = 165.95*yt.units.Mpc
+    dist_obj = 500*yt.units.Mpc
     # Assumed coordinate of the object
-    coord = [229.5, 42.82]
+    #coord = [229.5, 42.82]
+    coord = [0, 0]
 
 if yt.is_root():
     for subdir in [maindir, fitsdir]:
@@ -63,13 +59,13 @@ if yt.is_root():
             os.mkdir(subdir)
 
 for ds in ts.piter():
+    color, label = setup_cl(os.path.abspath(ds.directory))
     fields = []
     ds_sync = yt.load(synchrotron_filename(ds, extend_cells=gc))
     flist = ds_sync.field_list
 
     width = ds_sync.domain_width[1:]/zoom_fac
     #res = ds_sync.domain_dimensions[1:]*ds_sync.refine_by**ds_sync.index.max_level//zoom_fac
-    res = [512, 1024] if zoom_fac == 8 else [1024, 2048]
 
     for nu in nus:
         stokes = StokesFieldName(ptype, nu, proj_axis, field_type='flash')
@@ -78,8 +74,11 @@ for ds in ts.piter():
         else:
             fields += stokes.IQU
         for field in stokes.IQU:
-            ds_sync.field_info[field].units = 'Jy/cm/arcsec**2'
-            ds_sync.field_info[field].output_units = 'Jy/cm/arcsec**2'
+            try:
+                ds_sync.field_info[field].units = 'Jy/cm/arcsec**2'
+                ds_sync.field_info[field].output_units = 'Jy/cm/arcsec**2'
+            except KeyError:
+                raise KeyError("No field name %s in %s" % (field[1], ds.basename))
     if mock_observation:
         # Setting up mock observation FITS
         #  - Configure wcs coordinate
@@ -106,6 +105,7 @@ for ds in ts.piter():
         beam_axis = np.sqrt(beam_area/2/np.pi)*2*np.sqrt(2*np.log(2))
         # Major and minor beam axes
         beam_axis = float(beam_axis.in_units('deg').v)
+        dist = float(dist_obj.in_units('Mpc').v)
 
         header_dict = {
                    'CTYPE1': 'RA---SIN',
@@ -116,7 +116,8 @@ for ds in ts.piter():
                    'CUNIT3': 'Hz',
                    'BMAJ': (beam_axis, 'Beam major axis (deg)'),
                    'BMIN': (beam_axis, 'Beam minor axis (deg)'),
-                   'BPA': (0.0, 'Beam position angle (deg)')
+                   'BPA': (0.0, 'Beam position angle (deg)'),
+                   'DISTANCE': (dist, 'Assumed distance to the object (Mpc)')
                   }
 
         if proj_axis in ['x', 'y', 'z']:
@@ -140,7 +141,8 @@ for ds in ts.piter():
             fits_image.set_unit(field, 'Jy/beam')
             nu = yt.YTQuantity(*nu)
             header_dict.update({
-                   'OBJECT': 'Simulation %i %s' % (nu.v, nu.units),
+                   'OBJECT': 'Simulation %s - %.1f Myr - %i %s'
+                    % (list(label.values())[0], ds.current_time.in_units('Myr'), nu.v, nu.units),
                    'CRVAL3': int(nu.in_units('Hz').v)
                     })
             fits_image[field].header.update(header_dict)
@@ -154,10 +156,5 @@ for ds in ts.piter():
             fits_image = FITSOffAxisProjection(ds_sync, proj_axis, fields,
                          center=[0,0,0], north_vector=[1,0,0], width=width, image_res=res)
 
-    #    fits_proj = FITSProjection(ds_sync, proj_axis, fields,
-    #            center=[0,0,0], width=width, image_res=res)
-    #else:
-    #    fits_proj = FITSOffAxisProjection(ds_sync, proj_axis, fields,
-    #            center=[0,0,0], north_vector=[1,0,0], width=width, image_res=res)
     fitsfname = synchrotron_fits_filename(ds, dir, ptype, proj_axis, mock_observation)
     fits_image.writeto(fitsfname, clobber=True)
