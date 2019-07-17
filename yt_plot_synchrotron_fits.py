@@ -29,60 +29,61 @@ try:
     ind = int(sys.argv[1])
     ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_%04d' % ind), parallel=1, setup_function=setup_part_file)
 except IndexError:
-    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_??00'), parallel=0, setup_function=setup_part_file)
+    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_????'), parallel=8, setup_function=setup_part_file)
 
 mock_observation = True
 
-nus = [(nu, 'MHz') for nu in [100,300,600,1400,8000]]
-#nus = [(nu, 'MHz') for nu in [100,1400]]
+#nus = [(nu, 'MHz') for nu in [100,300,600,1400,8000]]
+nus = [(nu, 'MHz') for nu in [100,1400,8000]]
 
 zoom_fac = 4
-res = [512, 1024]# if zoom_fac == 8 else [1024, 2048]
 #proj_axis = [1,0,2]
 proj_axis = 'x'
 ptype = 'lobe'
 gc = 8
 maindir = os.path.join(dir, 'synchrotron_%s/' % ptype)
-fitsdir = 'fits_obs/' if mock_observation else 'fits/'
+fitsobsdir = 'fits_obs/'
+fitsobsdir = os.path.join(maindir, fitsobsdir)
+fitsdir = 'fits/'
 fitsdir = os.path.join(maindir, fitsdir)
 
-if mock_observation:
-    # Assumed distance to the object
-    dist_obj = 500*yt.units.Mpc
-    # Assumed coordinate of the object
-    #coord = [229.5, 42.82]
-    coord = [0, 0]
+# Assumed distance to the object
+dist_obj = 500*yt.units.Mpc
+# Assumed coordinate of the object
+#coord = [229.5, 42.82]
+coord = [0, 0]
 
 if yt.is_root():
-    for subdir in [maindir, fitsdir]:
+    for subdir in [maindir, fitsdir, fitsobsdir]:
         if not os.path.exists(subdir):
             os.mkdir(subdir)
 
 for ds in ts.piter():
-    color, label = setup_cl(os.path.abspath(ds.directory))
-    fields = []
+    if '0000' in ds.basename: continue
+    color, label = setup_cl([os.path.abspath(ds.directory)])
     ds_sync = yt.load(synchrotron_filename(ds, extend_cells=gc))
     flist = ds_sync.field_list
 
     width = ds_sync.domain_width[1:]/zoom_fac
     #res = ds_sync.domain_dimensions[1:]*ds_sync.refine_by**ds_sync.index.max_level//zoom_fac
-
+    fields = []
+    fieldsobs = []
     for nu in nus:
         stokes = StokesFieldName(ptype, nu, proj_axis, field_type='flash')
-        if mock_observation:
-            fields.append(stokes.I)
-        else:
-            fields += stokes.IQU
+        fieldsobs.append(stokes.I)
+        fields += stokes.IQU
         for field in stokes.IQU:
             try:
                 ds_sync.field_info[field].units = 'Jy/cm/arcsec**2'
                 ds_sync.field_info[field].output_units = 'Jy/cm/arcsec**2'
             except KeyError:
                 raise KeyError("No field name %s in %s" % (field[1], ds.basename))
+
     if mock_observation:
         # Setting up mock observation FITS
         #  - Configure wcs coordinate
         #  - Convert the unit from Jy/arcsec**2 to Jy/beam
+        res = [512, 1024]
         rad = yt.units.rad
         cdelt1 = (width[0]/dist_obj/res[0]*rad).in_units('deg')
         cdelt2 = (width[1]/dist_obj/res[1]*rad).in_units('deg')
@@ -147,14 +148,19 @@ for ds in ts.piter():
                     })
             fits_image[field].header.update(header_dict)
             fits_image[field].header.update(wcs_header)
-    else:
-        # Use stock yt FITSProjection and FITSOffAxisProjection
-        if proj_axis in ['x', 'y', 'z']:
-            fits_image = FITSProjection(ds_sync, proj_axis, fields,
-                        center=[0,0,0], width=width, image_res=res)
-        else:
-            fits_image = FITSOffAxisProjection(ds_sync, proj_axis, fields,
-                         center=[0,0,0], north_vector=[1,0,0], width=width, image_res=res)
+        fitsfname = synchrotron_fits_filename(ds, dir, ptype, proj_axis, mock_observation)
+        fits_image.writeto(fitsfname, clobber=True)
+        # End of if mock_observation
 
-    fitsfname = synchrotron_fits_filename(ds, dir, ptype, proj_axis, mock_observation)
+
+    # Use stock yt FITSProjection and FITSOffAxisProjection
+    res = [1024, 2048]
+    if proj_axis in ['x', 'y', 'z']:
+        fits_image = FITSProjection(ds_sync, proj_axis, fields,
+                    center=[0,0,0], width=width, image_res=res)
+    else:
+        fits_image = FITSOffAxisProjection(ds_sync, proj_axis, fields,
+                     center=[0,0,0], north_vector=[1,0,0], width=width, image_res=res)
+    fitsfname = synchrotron_fits_filename(ds, dir, ptype, proj_axis)
     fits_image.writeto(fitsfname, clobber=True)
+

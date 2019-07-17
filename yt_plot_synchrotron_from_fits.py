@@ -25,13 +25,14 @@ try:
     ind = int(sys.argv[1])
     ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_%04d' % ind), parallel=1)
 except IndexError:
-    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_????'), parallel=20, setup_function=setup_part_file)
+    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_????'), parallel=8, setup_function=setup_part_file)
 
 format = 'png'
 
 #proj_axis = [1,0,2]
 proj_axis = 'x'
-nus = [(nu, 'MHz') for nu in [100,300,600,1400,8000]]
+#nus = [(nu, 'MHz') for nu in [100,300,600,1400,8000]]
+nus = [(nu, 'MHz') for nu in [100,1400,8000]]
 ptype = 'lobe'
 gc = 8
 plot_emissivity_i= True
@@ -68,18 +69,18 @@ def to_fname(proj_axis):
     if proj_axis == 'x':
         return '_x_'
     else:
-        return '%i_%i_%i_' % tuple(proj_axis)
+        return '_%i_%i_%i_' % tuple(proj_axis)
 
 
 for ds in ts.piter():
     if '0000' in ds.basename: continue
-
+    #if int(ds.basename[-4:]) < 1200: continue
     projs, frb_I, frb_Q, frb_U = {}, {}, {}, {}
+    fitsname = synchrotron_fits_filename(ds, dir, ptype, proj_axis)
+    if not os.path.isfile(fitsname): continue
     for nu in nus:
         norm = yt.YTQuantity(*nu).in_units('GHz').value**0.5
 
-        fitsname = synchrotron_fits_filename(ds, dir, ptype, proj_axis)
-        if not os.path.isfile(fitsname): continue
         hdulist = fits.open(fitsname)
         stokes = StokesFieldName(ptype, nu, proj_axis, field_type='flash')
         frb_I[nu] = hdulist[stokes.I[1]].data
@@ -102,7 +103,7 @@ for ds in ts.piter():
             fig = plt.figure()
             plot = fig.add_subplot(111)
             vmin = np.log10(1E-4/norm)
-            vmax = np.log10(1E-2/norm)
+            vmax = np.log10(1E1/norm)
             cmap = plt.cm.hot
             cmap.set_bad('#0a0000')
             im = plot.imshow(np.log10(convolved_image.transpose()), vmin=vmin, vmax=vmax,
@@ -191,6 +192,7 @@ for ds in ts.piter():
             nu_str = '%i%s' % nu
             pollinefname += 'polarization_quiver_%s_%s.%s' % (ptype, nu_str, format)
             plt.savefig(os.path.join(polline, pollinefname), suffix=format, dpi=240)
+            plt.clf()
 
 
 
@@ -200,13 +202,13 @@ for ds in ts.piter():
         I1 = gaussian_filter(frb_I[nu1], sigma)
         I2 = gaussian_filter(frb_I[nu2], sigma)
         alpha = np.log10(I2/I1)/np.log10(nu2[0]/nu1[0])
-        alpha = np.ma.masked_where(I2<1E-6, np.array(alpha))
+        alpha = np.ma.masked_where(I2<1E-7, np.array(alpha))
         fig = plt.figure()
         plot = fig.add_subplot(111)
 
         cmap = plt.cm.jet
         cmap.set_bad('navy')
-        im = plot.imshow(alpha.transpose(), cmap=cmap, vmin=-1.0, vmax=-0.5,
+        im = plot.imshow(alpha.transpose(), cmap=cmap, vmin=-2.0, vmax=-0.5,
                          extent=ext, origin='lower', aspect='equal')
         plot.set_facecolor('navy')
         #pickle.dump(projs, open(dir+'projs/%s_projs.pickle' % ds.basename, 'wb'))
@@ -236,4 +238,5 @@ for ds in ts.piter():
         sifname += to_fname(proj_axis)
         sifname += 'proj_spectral_index.%s' % format
         plt.savefig(os.path.join(spectral_index_dir, sifname), format=format, dpi=240)
+        plt.clf()
 
