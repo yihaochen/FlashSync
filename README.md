@@ -8,13 +8,14 @@ Scripts to generate synchrotron maps from the customized FLASH simulation.
 1. FLASH plot and particle files
     * `XXX_plt_cnt_####`
     * `XXX_part_####`
-2. python installation, including `h5py` and `astropy`
-3. yt installation
-4. MPI and HDF5 installaion
-5. The scripts in this repository
+2. Software and library
+    * python, including `h5py` and `astropy`
+    * my (slightly modified) version of [`yt`](https://github.com/yihaochen/yt)
+    * MPI and HDF5
+3. The scripts in this repository
 
-Everything should be setup on cetus. You will need to use my Anaconda
-environment on cetus.
+Everything should be setup on cetus. You can use my Anaconda environment
+on the cetus cluster.
 
 ```
 source /home/ychen/anaconda3/etc/profile.d/conda.sh
