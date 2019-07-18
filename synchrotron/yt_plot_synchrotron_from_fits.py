@@ -43,7 +43,7 @@ try:
     ind = int(sys.argv[1])
     ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_%04d' % ind), parallel=1)
 except IndexError:
-    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_????'), parallel=8, setup_function=setup_part_file)
+    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_????'), parallel=8)
 
 # Directories to save the fits and observation fits files
 maindir = os.path.join(dir, 'synchrotron_%s/' % ptype)

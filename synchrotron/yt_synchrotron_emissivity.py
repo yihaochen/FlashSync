@@ -81,6 +81,35 @@ def _jet_volume_fraction(field, data):
     return 1.0 - icm_volume_fraction
 
 
+def setup_part_file(ds):
+    filename = os.path.join(ds.directory,ds.basename)
+    updated_pfname = re.sub(r'_synchrotron_.*','',filename).replace('plt_cnt', 'part')+'_updated_peak'
+    if os.path.exists(updated_pfname):
+        ds._particle_handle = HDF5FileHandler(updated_pfname)
+        ds.particle_filename = updated_pfname
+        mylog.info('Changed particle files to: %s', ds.particle_filename)
+        return True
+    else:
+        return False
+
+
+def determine_sim_version(ds):
+    # Determine the version of the simulation
+    if ('io', 'particle_tau1') in ds.field_list:
+        version = 2018
+        mylog.info('Field particle_tau1 detected. This is a version 2018 simulation.')
+    elif ('io', 'particle_type') in ds.field_list:
+        version = 2016
+        mylog.info('Field particle_type detected. This is a version 2016 simulation.')
+    else:
+        version = 2015
+        # Update the particle file handler in yt; raise exception if not successful
+        success = setup_part_file(ds)
+        mylog.info('Assuming this is a version 2015 simulation.')
+        if not success:
+            raise IOError
+    return version
+
 def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
                                     method='nearest_weighted', proj_axis='x',
                                     extend_cells=32):
@@ -128,20 +157,7 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
     yvec = np.array(yvec)
     los = los/np.sqrt(np.sum(los*los))
 
-    # Determine the version of the simulation
-    if ('io', 'particle_tau1') in ds.field_list:
-        version = 2018
-        mylog.info('Field particle_tau1 detected. This is a version 2018 simulation.')
-    elif ('io', 'particle_type') in ds.field_list:
-        version = 2016
-        mylog.info('Field particle_type detected. This is a version 2016 simulation.')
-    else:
-        version = 2015
-        # Update the particle file handler in yt; raise exception if not successful
-        success = setup_part_file(ds)
-        mylog.info('Assuming this is a version 2015 simulation.')
-        if not success:
-            raise IOError
+    version = determine_sim_version(ds)
 
     if ('gas', 'jet_volume_fraction') not in ds.derived_field_list:
         ds.add_field(('gas', 'jet_volume_fraction'), function=_jet_volume_fraction,
@@ -390,18 +406,6 @@ def add_synchrotron_dtau_emissivity(ds, ptype='lobe', nu=(1.4, 'GHz'),
                  force_override=True)
 
     return pfname, fname_nn, stokes.I, stokes.nu_str
-
-
-def setup_part_file(ds):
-    filename = os.path.join(ds.directory,ds.basename)
-    updated_pfname = re.sub(r'_synchrotron_.*','',filename).replace('plt_cnt', 'part')+'_updated_peak'
-    if os.path.exists(updated_pfname):
-        ds._particle_handle = HDF5FileHandler(updated_pfname)
-        ds.particle_filename = updated_pfname
-        mylog.info('Changed particle files to: %s', ds.particle_filename)
-        return True
-    else:
-        return False
 
 
 def synchrotron_filename(ds, extend_cells=None):

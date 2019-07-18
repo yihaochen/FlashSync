@@ -15,7 +15,6 @@ from yt.visualization.fits_image import\
         FITSOffAxisProjection
 from astropy.wcs import WCS
 from yt_synchrotron_emissivity import\
-        setup_part_file,\
         synchrotron_filename,\
         synchrotron_fits_filename,\
         StokesFieldName
@@ -51,9 +50,9 @@ res_obs = [512, 1024]
 
 try:
     ind = int(sys.argv[1])
-    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_%04d' % ind), parallel=1, setup_function=setup_part_file)
+    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_%04d' % ind), parallel=1)
 except IndexError:
-    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_????'), parallel=8, setup_function=setup_part_file)
+    ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_????'), parallel=8)
 
 # Directories to save the fits and observation fits files
 maindir = os.path.join(dir, 'synchrotron_%s/' % ptype)
