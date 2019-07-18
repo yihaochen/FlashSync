@@ -14,32 +14,38 @@ yt.mylog.setLevel('INFO')
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from synchrotron.yt_synchrotron_emissivity import\
         setup_part_file,\
-        synchrotron_filename,\
         synchrotron_fits_filename,\
         StokesFieldName
 from scipy.ndimage import gaussian_filter
 from astropy.io import fits
 
+################################
+# Parameters
+################################
 dir = './'
+ptype = 'lobe'
+proj_axis = 'x'
+#proj_axis = [1,0,2]
+extend_cells = 8
+#nus = [(nu, 'MHz') for nu in [100,300,600,1400,8000]]
+nus = [(nu, 'MHz') for nu in [100,1400,8000]]
+
+# Toggle to plot the I emissivity
+plot_emissivity_i= True
+# Toggle to plot the polarization lines
+plot_polline     = True
+# Toggle to plot the spectral index between first and last nus
+plot_spectralind = True
+# Image format
+format = 'png'
+
 try:
     ind = int(sys.argv[1])
     ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_%04d' % ind), parallel=1)
 except IndexError:
     ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_????'), parallel=8, setup_function=setup_part_file)
 
-format = 'png'
-
-#proj_axis = [1,0,2]
-proj_axis = 'x'
-#nus = [(nu, 'MHz') for nu in [100,300,600,1400,8000]]
-nus = [(nu, 'MHz') for nu in [100,1400,8000]]
-ptype = 'lobe'
-gc = 8
-plot_emissivity_i= True
-plot_polline     = True
-plot_spectralind = True
-
-
+# Directories to save the fits and observation fits files
 maindir = os.path.join(dir, 'synchrotron_%s/' % ptype)
 if proj_axis != 'x':
     maindir = os.path.join(maindir, '%i_%i_%i' % tuple(proj_axis))

@@ -7,51 +7,61 @@ matplotlib.use('Agg')
 import yt
 yt.enable_parallelism()
 yt.mylog.setLevel('INFO')
-from itertools import chain
 from yt import FITSImageData
 from yt.visualization.volume_rendering.off_axis_projection import \
         off_axis_projection
 from yt.visualization.fits_image import\
-        construct_image,\
         FITSProjection,\
         FITSOffAxisProjection
 from astropy.wcs import WCS
-from synchrotron.yt_synchrotron_emissivity import\
+from yt_synchrotron_emissivity import\
         setup_part_file,\
-        write_synchrotron_hdf5,\
         synchrotron_filename,\
         synchrotron_fits_filename,\
         StokesFieldName
 from tools import setup_cl
 
+################################
+# Parameters
+################################
 dir = './'
+ptype = 'lobe'
+proj_axis = 'x'
+#proj_axis = [1,0,2]
+extend_cells = 8
+#nus = [(nu, 'MHz') for nu in [100,300,600,1400,8000]]
+nus = [(nu, 'MHz') for nu in [100,1400,8000]]
+
+# Zoom in factor relative to the full simulation domain
+zoom_fac = 4
+# Resolution of the fits image
+res = [1024, 2048]
+
+
+# Toggle to save an additional mock observation fits
+# The file will use the distance and coordinate to convert the fits into a wcs coordinate
+mock_observation = True
+# Assumed distance to the object
+dist_obj = 500*yt.units.Mpc
+# Assumed coordinate of the object
+coord = [0, 0]
+#coord = [229.5, 42.82]
+# Resolution of the observation fits image
+res_obs = [512, 1024]
+
 try:
     ind = int(sys.argv[1])
     ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_%04d' % ind), parallel=1, setup_function=setup_part_file)
 except IndexError:
     ts = yt.DatasetSeries(os.path.join(dir,'data/*_hdf5_plt_cnt_????'), parallel=8, setup_function=setup_part_file)
 
-mock_observation = True
-
-#nus = [(nu, 'MHz') for nu in [100,300,600,1400,8000]]
-nus = [(nu, 'MHz') for nu in [100,1400,8000]]
-
-zoom_fac = 4
-#proj_axis = [1,0,2]
-proj_axis = 'x'
-ptype = 'lobe'
-gc = 8
+# Directories to save the fits and observation fits files
 maindir = os.path.join(dir, 'synchrotron_%s/' % ptype)
 fitsobsdir = 'fits_obs/'
 fitsobsdir = os.path.join(maindir, fitsobsdir)
 fitsdir = 'fits/'
 fitsdir = os.path.join(maindir, fitsdir)
 
-# Assumed distance to the object
-dist_obj = 500*yt.units.Mpc
-# Assumed coordinate of the object
-#coord = [229.5, 42.82]
-coord = [0, 0]
 
 if yt.is_root():
     for subdir in [maindir, fitsdir, fitsobsdir]:
@@ -61,7 +71,7 @@ if yt.is_root():
 for ds in ts.piter():
     if '0000' in ds.basename: continue
     color, label = setup_cl([os.path.abspath(ds.directory)])
-    ds_sync = yt.load(synchrotron_filename(ds, extend_cells=gc))
+    ds_sync = yt.load(synchrotron_filename(ds, extend_cells=extend_cells))
     flist = ds_sync.field_list
 
     width = ds_sync.domain_width[1:]/zoom_fac
@@ -83,15 +93,14 @@ for ds in ts.piter():
         # Setting up mock observation FITS
         #  - Configure wcs coordinate
         #  - Convert the unit from Jy/arcsec**2 to Jy/beam
-        res = [512, 1024]
         rad = yt.units.rad
-        cdelt1 = (width[0]/dist_obj/res[0]*rad).in_units('deg')
-        cdelt2 = (width[1]/dist_obj/res[1]*rad).in_units('deg')
+        cdelt1 = (width[0]/dist_obj/res_obs[0]*rad).in_units('deg')
+        cdelt2 = (width[1]/dist_obj/res_obs[1]*rad).in_units('deg')
 
         # Setting up wcs header
         w = WCS(naxis=2)
         # reference pixel coordinate
-        w.wcs.crpix = [res[0]/2,res[1]/2]
+        w.wcs.crpix = [res_obs[0]/2,res_obs[1]/2]
         # sizes of the pixel in degrees
         w.wcs.cdelt = [cdelt1.base, cdelt2.base]
         # converting ra and dec into degrees
@@ -124,7 +133,7 @@ for ds in ts.piter():
         if proj_axis in ['x', 'y', 'z']:
             # On-Axis Projections
             prj = ds_sync.proj(stokes.I, proj_axis)
-            buf = prj.to_frb(width[0], res, height=width[1])
+            buf = prj.to_frb(width[0], res_obs, height=width[1])
         else:
             # Off-Axis Projections
             buf = {}
@@ -132,7 +141,7 @@ for ds in ts.piter():
             wd = tuple(w.in_units('code_length').v for w in width)
             for field in fields:
                 buf[field] = off_axis_projection(ds_sync, [0,0,0], proj_axis, wd,
-                                res, field, north_vector=[1,0,0], num_threads=0).swapaxes(0,1)
+                                res_obs, field, north_vector=[1,0,0], num_threads=0).swapaxes(0,1)
         fits_image = FITSImageData(buf, fields=fields, wcs=w)
         for nu in nus:
             stokes = StokesFieldName(ptype, nu, proj_axis, field_type='flash')
@@ -150,11 +159,10 @@ for ds in ts.piter():
             fits_image[field].header.update(wcs_header)
         fitsfname = synchrotron_fits_filename(ds, dir, ptype, proj_axis, mock_observation)
         fits_image.writeto(fitsfname, clobber=True)
-        # End of if mock_observation
+    # End of if mock_observation
 
 
     # Use stock yt FITSProjection and FITSOffAxisProjection
-    res = [1024, 2048]
     if proj_axis in ['x', 'y', 'z']:
         fits_image = FITSProjection(ds_sync, proj_axis, fields,
                     center=[0,0,0], width=width, image_res=res)
