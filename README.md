@@ -23,7 +23,7 @@ source /home/ychen/anaconda3/etc/profile.d/conda.sh
 
 Then you need to make symlinks of the three scripts to the directory
 where the FLASH outputs are located `yt_write_synchrotron_hdf5.py`,
-`yt_plot_synchrotron_fits.py`, and `yt_plot_synchrotron_from_its.py`.
+`yt_plot_synchrotron_fits.py`, and `yt_plot_synchrotron_from_fits.py`.
 
 ### 1. Calculate and write the synchrotron emissivity in each cell to an HDF5 file
 
